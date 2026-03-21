@@ -16,6 +16,7 @@ export interface RoomState {
     isPlaying: boolean;
     videoSource: string;
     position: number;
+    syncVersion: bigint;
 }
 export type Time = bigint;
 export interface CreateRoomRequest {
@@ -39,12 +40,18 @@ export interface backendInterface {
     assignCallerUserRole(user: Principal, role: UserRole): Promise<void>;
     createRoom(request: CreateRoomRequest): Promise<void>;
     deleteRoom(roomCode: string): Promise<void>;
+    forceSyncAll(request: {
+        isPlaying: boolean;
+        position: number;
+        roomCode: string;
+    }): Promise<bigint>;
     getAllParticipants(roomCode: string): Promise<Array<string>>;
     getAllRoomStates(): Promise<Array<RoomState>>;
     getCallerUserProfile(): Promise<UserProfile | null>;
     getCallerUserRole(): Promise<UserRole>;
     getChatMessages(roomCode: string): Promise<Array<ChatMessage>>;
     getRoomState(roomCode: string): Promise<RoomState>;
+    getSyncVersion(roomCode: string): Promise<bigint>;
     getUserProfile(user: Principal): Promise<UserProfile | null>;
     isCallerAdmin(): Promise<boolean>;
     joinRoom(roomCode: string, nickname: string): Promise<RoomState>;

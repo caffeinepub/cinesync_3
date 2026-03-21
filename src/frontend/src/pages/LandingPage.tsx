@@ -15,7 +15,12 @@ interface LandingPageProps {
 
 export default function LandingPage({ onEnterRoom }: LandingPageProps) {
   const { identity, login, clear, loginStatus } = useInternetIdentity();
-  const { actor, isFetching: actorFetching } = useActor();
+  const {
+    actor,
+    isFetching: actorFetching,
+    isError: actorIsError,
+  } = useActor();
+  const actorError = actorIsError && !actorFetching;
   const qc = useQueryClient();
 
   const [createCode, setCreateCode] = useState("");
@@ -39,7 +44,13 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
       return;
     }
     if (!actor) {
-      toast.error("Still connecting to backend, please try again in a moment");
+      if (actorError) {
+        toast.error("Backend unavailable — please refresh the page");
+      } else {
+        toast.error(
+          "Still connecting to backend, please try again in a moment",
+        );
+      }
       return;
     }
     setCreateLoading(true);
@@ -63,7 +74,13 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
       return;
     }
     if (!actor) {
-      toast.error("Still connecting to backend, please try again in a moment");
+      if (actorError) {
+        toast.error("Backend unavailable — please refresh the page");
+      } else {
+        toast.error(
+          "Still connecting to backend, please try again in a moment",
+        );
+      }
       return;
     }
     setJoinLoading(true);
@@ -94,6 +111,21 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
       }
     }
   };
+
+  // Derive create button state
+  const isConnecting = actorFetching && isAuthenticated && !actorError;
+  const hasBackendError = actorError && isAuthenticated;
+
+  const createButtonLabel = createLoading
+    ? "Creating..."
+    : hasBackendError
+      ? "Backend Error — Refresh"
+      : isConnecting
+        ? "Connecting..."
+        : "Create Room";
+
+  const createButtonDisabled =
+    !isAuthenticated || createLoading || hasBackendError;
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -230,6 +262,15 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
               </div>
             )}
 
+            {hasBackendError && (
+              <div
+                className="rounded-lg bg-destructive/10 border border-destructive/30 p-3 text-sm text-destructive"
+                data-ocid="create.error_state"
+              >
+                Backend connection failed. Please refresh the page to try again.
+              </div>
+            )}
+
             <div className="flex flex-col gap-3">
               <div>
                 <Label className="text-xs text-muted-foreground uppercase tracking-wider mb-1.5 block">
@@ -261,18 +302,14 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
               </div>
               <Button
                 onClick={handleCreate}
-                disabled={!isAuthenticated || createLoading || actorFetching}
-                className="w-full bg-gold text-background hover:bg-gold/90 font-semibold h-10 mt-1"
+                disabled={createButtonDisabled}
+                className="w-full bg-gold text-background hover:bg-gold/90 font-semibold h-10 mt-1 disabled:opacity-60"
                 data-ocid="create.submit.button"
               >
-                {createLoading || (actorFetching && isAuthenticated) ? (
+                {(createLoading || isConnecting) && !hasBackendError ? (
                   <Loader2 className="w-4 h-4 animate-spin mr-2" />
                 ) : null}
-                {createLoading
-                  ? "Creating..."
-                  : actorFetching && isAuthenticated
-                    ? "Connecting..."
-                    : "Create Room"}
+                {createButtonLabel}
               </Button>
             </div>
           </motion.div>
@@ -297,6 +334,15 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
                 </p>
               </div>
             </div>
+
+            {actorError && (
+              <div
+                className="rounded-lg bg-destructive/10 border border-destructive/30 p-3 text-sm text-destructive"
+                data-ocid="join.error_state"
+              >
+                Backend connection failed. Please refresh the page to try again.
+              </div>
+            )}
 
             <div className="flex flex-col gap-3">
               <div>

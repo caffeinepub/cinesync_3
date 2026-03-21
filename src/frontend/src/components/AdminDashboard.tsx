@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Check, Link2, Loader2, Upload, X } from "lucide-react";
+import { Check, Link2, Loader2, RefreshCw, Upload, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -12,12 +12,14 @@ interface AdminDashboardProps {
   roomCode: string;
   onClose: () => void;
   onVideoSourceChange: (src: string) => void;
+  onForceSyncAll: () => void;
 }
 
 export default function AdminDashboard({
   roomCode,
   onClose,
   onVideoSourceChange,
+  onForceSyncAll,
 }: AdminDashboardProps) {
   const { actor } = useActor();
   const storageClient = useStorageClient();
@@ -25,6 +27,7 @@ export default function AdminDashboard({
   const [applying, setApplying] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [syncing, setSyncing] = useState(false);
 
   const handleApplyUrl = async () => {
     const url = urlValue.trim();
@@ -67,6 +70,16 @@ export default function AdminDashboard({
     }
   };
 
+  const handleForceSync = async () => {
+    setSyncing(true);
+    try {
+      await onForceSyncAll();
+      toast.success("Force synced all viewers!");
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   return (
     <AnimatePresence>
       <motion.div
@@ -104,7 +117,7 @@ export default function AdminDashboard({
           </div>
 
           {/* Tabs */}
-          <div className="p-5">
+          <div className="p-5 space-y-4">
             <Tabs defaultValue="url">
               <TabsList className="w-full bg-secondary border border-border mb-4">
                 <TabsTrigger
@@ -200,6 +213,26 @@ export default function AdminDashboard({
                 )}
               </TabsContent>
             </Tabs>
+
+            {/* Force Sync Section */}
+            <div className="pt-1 border-t border-border">
+              <p className="text-xs text-muted-foreground mb-2.5">
+                Override playback state for ALL viewers
+              </p>
+              <Button
+                onClick={handleForceSync}
+                disabled={syncing}
+                className="w-full bg-amber-500/20 border border-amber-500/40 text-amber-400 hover:bg-amber-500/30 font-semibold h-10 transition-colors"
+                data-ocid="admin.force_sync.button"
+              >
+                {syncing ? (
+                  <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                ) : (
+                  <RefreshCw className="w-4 h-4 mr-2" />
+                )}
+                {syncing ? "Syncing..." : "Force Sync All Viewers"}
+              </Button>
+            </div>
           </div>
         </motion.div>
       </motion.div>

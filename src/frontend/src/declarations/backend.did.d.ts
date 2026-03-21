@@ -28,6 +28,7 @@ export interface RoomState {
   'isPlaying' : boolean,
   'videoSource' : string,
   'position' : number,
+  'syncVersion' : bigint,
 }
 export type Time = bigint;
 export interface UserProfile { 'name' : string }
@@ -65,12 +66,17 @@ export interface _SERVICE {
   'assignCallerUserRole' : ActorMethod<[Principal, UserRole], undefined>,
   'createRoom' : ActorMethod<[CreateRoomRequest], undefined>,
   'deleteRoom' : ActorMethod<[string], undefined>,
+  'forceSyncAll' : ActorMethod<
+    [{ 'isPlaying' : boolean, 'position' : number, 'roomCode' : string }],
+    bigint
+  >,
   'getAllParticipants' : ActorMethod<[string], Array<string>>,
   'getAllRoomStates' : ActorMethod<[], Array<RoomState>>,
   'getCallerUserProfile' : ActorMethod<[], [] | [UserProfile]>,
   'getCallerUserRole' : ActorMethod<[], UserRole>,
   'getChatMessages' : ActorMethod<[string], Array<ChatMessage>>,
   'getRoomState' : ActorMethod<[string], RoomState>,
+  'getSyncVersion' : ActorMethod<[string], bigint>,
   'getUserProfile' : ActorMethod<[Principal], [] | [UserProfile]>,
   'isCallerAdmin' : ActorMethod<[], boolean>,
   'joinRoom' : ActorMethod<[string, string], RoomState>,

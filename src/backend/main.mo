@@ -3,11 +3,14 @@ import Set "mo:core/Set";
 import Time "mo:core/Time";
 import Runtime "mo:core/Runtime";
 import Principal "mo:core/Principal";
+import Nat "mo:core/Nat";
 import Text "mo:core/Text";
-
+import Iter "mo:core/Iter";
 import AccessControl "authorization/access-control";
 import MixinAuthorization "authorization/MixinAuthorization";
 import MixinStorage "blob-storage/Mixin";
+
+
 
 actor {
   // Initialize the access control system
@@ -51,7 +54,7 @@ actor {
     timestamp : Time.Time;
   };
 
-  type RoomState = {
+  public type RoomState = {
     creator : Principal;
     hostNickname : Text;
     videoSource : Text;
@@ -60,6 +63,7 @@ actor {
     lastUpdated : Time.Time;
     participants : [Text];
     chatMessages : [ChatMessage];
+    syncVersion : Nat;
   };
 
   type Room = {
@@ -72,9 +76,10 @@ actor {
     lastUpdated : Time.Time;
     participants : Set.Set<Text>;
     chatMessages : [ChatMessage];
+    syncVersion : Nat;
   };
 
-  type CreateRoomRequest = {
+  public type CreateRoomRequest = {
     roomCode : Text;
     hostNickname : Text;
   };
@@ -82,17 +87,14 @@ actor {
   let rooms = Map.empty<Text, Room>();
 
   // Room Management Functions
-
   public shared ({ caller }) func createRoom(request : CreateRoomRequest) : async () {
     // Any authenticated user (not guest) can create a room
     if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
       Runtime.trap("Unauthorized: Only authenticated users can create rooms");
     };
-
     if (rooms.containsKey(request.roomCode)) {
       Runtime.trap("Room already exists with code: " # request.roomCode);
     };
-
     let room : Room = {
       roomCode = request.roomCode;
       creator = caller;
@@ -103,6 +105,7 @@ actor {
       lastUpdated = Time.now();
       participants = Set.singleton(request.hostNickname);
       chatMessages = [];
+      syncVersion = 1;
     };
     rooms.add(request.roomCode, room);
   };
@@ -118,13 +121,10 @@ actor {
   public shared ({ caller }) func joinRoom(roomCode : Text, nickname : Text) : async RoomState {
     // Any user including guests can join a room
     let room = getRoomInternal(roomCode);
-
     if (room.participants.contains(nickname)) {
       Runtime.trap("Nickname already taken in this room");
     };
-
     room.participants.add(nickname);
-
     let newParticipants = room.participants.toArray();
     let updatedRoom : Room = {
       roomCode = room.roomCode;
@@ -136,6 +136,7 @@ actor {
       lastUpdated = Time.now();
       participants = room.participants;
       chatMessages = room.chatMessages;
+      syncVersion = room.syncVersion;
     };
     rooms.add(roomCode, updatedRoom);
     {
@@ -147,19 +148,17 @@ actor {
       lastUpdated = room.lastUpdated;
       participants = newParticipants;
       chatMessages = room.chatMessages;
+      syncVersion = room.syncVersion;
     };
   };
 
   public shared ({ caller }) func leaveRoom(request : { roomCode : Text; nickname : Text }) : async () {
     // Any user can leave a room they're in
     let room = getRoomInternal(request.roomCode);
-
     if (not room.participants.contains(request.nickname)) {
       Runtime.trap("Not a member of this room");
     };
-
     room.participants.remove(request.nickname);
-
     let updatedRoom : Room = {
       roomCode = room.roomCode;
       creator = room.creator;
@@ -170,23 +169,21 @@ actor {
       lastUpdated = Time.now();
       participants = room.participants;
       chatMessages = room.chatMessages;
+      syncVersion = room.syncVersion;
     };
     rooms.add(request.roomCode, updatedRoom);
   };
 
   // Playback Sync Functions (Host-only)
-
   public shared ({ caller }) func updatePlaybackState(request : {
     roomCode : Text;
     position : Float;
     isPlaying : Bool;
   }) : async () {
     let room = getRoomInternal(request.roomCode);
-
     if (caller != room.creator) {
       Runtime.trap("Unauthorized: Only the room creator can update playback state");
     };
-
     let updatedRoom : Room = {
       roomCode = room.roomCode;
       creator = room.creator;
@@ -197,6 +194,7 @@ actor {
       lastUpdated = Time.now();
       participants = room.participants;
       chatMessages = room.chatMessages;
+      syncVersion = room.syncVersion;
     };
     rooms.add(request.roomCode, updatedRoom);
   };
@@ -206,11 +204,9 @@ actor {
     videoSource : Text;
   }) : async () {
     let room = getRoomInternal(request.roomCode);
-
     if (caller != room.creator) {
       Runtime.trap("Unauthorized: Only the room creator can set the video source");
     };
-
     let updatedRoom : Room = {
       roomCode = room.roomCode;
       creator = room.creator;
@@ -221,12 +217,38 @@ actor {
       lastUpdated = Time.now();
       participants = room.participants;
       chatMessages = room.chatMessages;
+      syncVersion = room.syncVersion;
     };
     rooms.add(request.roomCode, updatedRoom);
   };
 
-  // Chat Functions
+  // New forceSyncAll functionality
+  public shared ({ caller }) func forceSyncAll(request : {
+    roomCode : Text;
+    position : Float;
+    isPlaying : Bool;
+  }) : async Nat {
+    let room = getRoomInternal(request.roomCode);
+    if (caller != room.creator) {
+      Runtime.trap("Unauthorized: Only the room creator can force sync");
+    };
+    let updatedRoom : Room = {
+      roomCode = room.roomCode;
+      creator = room.creator;
+      hostNickname = room.hostNickname;
+      videoSource = room.videoSource;
+      position = request.position;
+      isPlaying = request.isPlaying;
+      lastUpdated = Time.now();
+      participants = room.participants;
+      chatMessages = room.chatMessages;
+      syncVersion = room.syncVersion + 1;
+    };
+    rooms.add(request.roomCode, updatedRoom);
+    updatedRoom.syncVersion;
+  };
 
+  // Chat Functions
   public shared ({ caller }) func sendChatMessage(request : {
     roomCode : Text;
     nickname : Text;
@@ -234,17 +256,14 @@ actor {
   }) : async () {
     // Any user including guests can send chat messages
     let room = getRoomInternal(request.roomCode);
-
     let sender = if (request.nickname == "") {
       room.hostNickname;
     } else { request.nickname };
-
     let newMessage : ChatMessage = {
       sender;
       message = request.message;
       timestamp = Time.now();
     };
-
     let updatedMessages = room.chatMessages.concat([newMessage]);
     let updatedRoom : Room = {
       roomCode = room.roomCode;
@@ -256,17 +275,17 @@ actor {
       lastUpdated = room.lastUpdated;
       participants = room.participants;
       chatMessages = updatedMessages;
+      syncVersion = room.syncVersion;
     };
     rooms.add(request.roomCode, updatedRoom);
   };
 
+  // Query Functions
   public query ({ caller }) func getChatMessages(roomCode : Text) : async [ChatMessage] {
     // Any user including guests can read chat messages
     let room = getRoomInternal(roomCode);
     room.chatMessages;
   };
-
-  // Query Functions
 
   public query ({ caller }) func getRoomState(roomCode : Text) : async RoomState {
     // Any user including guests can view room state
@@ -280,6 +299,7 @@ actor {
       lastUpdated = room.lastUpdated;
       participants = room.participants.toArray();
       chatMessages = room.chatMessages;
+      syncVersion = room.syncVersion;
     };
   };
 
@@ -288,22 +308,7 @@ actor {
     if (not (AccessControl.isAdmin(accessControlState, caller))) {
       Runtime.trap("Unauthorized: Only admins can view all rooms");
     };
-
-    let result = rooms.values().toArray().map(
-      func(room) {
-        {
-          creator = room.creator;
-          hostNickname = room.hostNickname;
-          videoSource = room.videoSource;
-          position = room.position;
-          isPlaying = room.isPlaying;
-          lastUpdated = room.lastUpdated;
-          participants = room.participants.toArray();
-          chatMessages = room.chatMessages;
-        };
-      }
-    );
-    result;
+    rooms.values().toArray().map(func(room) { toRoomState(room) });
   };
 
   public query ({ caller }) func getAllParticipants(roomCode : Text) : async [Text] {
@@ -312,14 +317,33 @@ actor {
     room.participants.toArray();
   };
 
-  // Internal Helper Functions
+  public query ({ caller }) func getSyncVersion(roomCode : Text) : async Nat {
+    // Any user including guests can check the current sync version
+    let room = getRoomInternal(roomCode);
+    room.syncVersion;
+  };
 
+  // Internal Helper Functions
   func getRoomInternal(roomCode : Text) : Room {
     switch (rooms.get(roomCode)) {
       case (null) {
         Runtime.trap("Room does not exist: " # roomCode);
       };
       case (?room) { room };
+    };
+  };
+
+  func toRoomState(room : Room) : RoomState {
+    {
+      creator = room.creator;
+      hostNickname = room.hostNickname;
+      videoSource = room.videoSource;
+      position = room.position;
+      isPlaying = room.isPlaying;
+      lastUpdated = room.lastUpdated;
+      participants = room.participants.toArray();
+      chatMessages = room.chatMessages;
+      syncVersion = room.syncVersion;
     };
   };
 };

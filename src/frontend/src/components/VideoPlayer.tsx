@@ -26,6 +26,11 @@ export interface VideoPlayerHandle {
   play: () => void;
   pause: () => void;
   setSource: (src: string) => void;
+  /**
+   * Load a new source, seek to position, and optionally play —
+   * waits for the video to be ready before seeking/playing.
+   */
+  loadAndSync: (src: string, position: number, shouldPlay: boolean) => void;
   getCurrentTime: () => number;
   getIsPaused: () => boolean;
 }
@@ -56,6 +61,8 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
     const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const lastTimeUpdateRef = useRef(0);
     const internalTimeRef = useRef(0);
+    // Track pending canplay listeners to clean up on unmount
+    const pendingCanPlayRef = useRef<(() => void) | null>(null);
 
     const [isPlaying, setIsPlaying] = useState(false);
     const [currentTime, setCurrentTime] = useState(0);
@@ -68,7 +75,6 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
     const [urlInputValue, setUrlInputValue] = useState(src || "");
     const [hasSrc, setHasSrc] = useState(!!src);
 
-    // Expose imperative handle
     useImperativeHandle(ref, () => ({
       seek: (time: number) => {
         if (videoRef.current) {
@@ -89,9 +95,45 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
           setUrlInputValue(newSrc);
         }
       },
+      loadAndSync: (newSrc: string, position: number, shouldPlay: boolean) => {
+        const video = videoRef.current;
+        if (!video || !newSrc) return;
+
+        // Remove any previously registered canplay listener
+        if (pendingCanPlayRef.current) {
+          video.removeEventListener("canplay", pendingCanPlayRef.current);
+          pendingCanPlayRef.current = null;
+        }
+
+        const onCanPlay = () => {
+          video.removeEventListener("canplay", onCanPlay);
+          pendingCanPlayRef.current = null;
+          video.currentTime = position;
+          if (shouldPlay) {
+            video.play().catch(() => {});
+          }
+        };
+        pendingCanPlayRef.current = onCanPlay;
+        video.addEventListener("canplay", onCanPlay);
+
+        video.src = newSrc;
+        video.load();
+        setHasSrc(true);
+        setUrlInputValue(newSrc);
+      },
       getCurrentTime: () => internalTimeRef.current,
       getIsPaused: () => videoRef.current?.paused ?? true,
     }));
+
+    // Cleanup pending listener on unmount
+    useEffect(() => {
+      return () => {
+        const video = videoRef.current;
+        if (video && pendingCanPlayRef.current) {
+          video.removeEventListener("canplay", pendingCanPlayRef.current);
+        }
+      };
+    }, []);
 
     // Sync src prop changes
     useEffect(() => {
@@ -131,6 +173,7 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
     }, [isPlaying]);
 
     const togglePlay = () => {
+      if (!isHost) return;
       const video = videoRef.current;
       if (!video || !hasSrc) return;
       if (video.paused) {
@@ -141,6 +184,7 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
     };
 
     const handleProgressChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (!isHost) return;
       const video = videoRef.current;
       if (!video) return;
       const newTime = (Number(e.target.value) / 100) * duration;
@@ -150,6 +194,7 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
     };
 
     const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      if (!isHost) return;
       const v = Number(e.target.value) / 100;
       setVolume(v);
       if (videoRef.current) {
@@ -160,6 +205,7 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
     };
 
     const toggleMute = () => {
+      if (!isHost) return;
       const video = videoRef.current;
       if (!video) return;
       if (isMuted) {
@@ -228,8 +274,8 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
           }}
           onLoadedMetadata={() => setDuration(videoRef.current?.duration ?? 0)}
           onSeeked={() => onSeeked?.(videoRef.current?.currentTime ?? 0)}
-          onClick={togglePlay}
-          onKeyDown={(e) => e.key === " " && togglePlay()}
+          onClick={isHost ? togglePlay : undefined}
+          onKeyDown={(e) => isHost && e.key === " " && togglePlay()}
           playsInline
         >
           <track kind="captions" />
@@ -315,8 +361,8 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
           </div>
         )}
 
-        {/* Big play/pause button (center) */}
-        {hasSrc && !isPlaying && (
+        {/* Big play/pause button (center) -- HOST ONLY */}
+        {hasSrc && !isPlaying && isHost && (
           <button
             type="button"
             onClick={togglePlay}
@@ -338,37 +384,43 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
               controlsVisible || !isPlaying ? "opacity-100" : "opacity-0",
             )}
           >
-            {/* Progress scrubber */}
-            <div className="mb-2 relative">
-              <input
-                type="range"
-                min="0"
-                max="100"
-                value={progress}
-                onChange={handleProgressChange}
-                className="video-scrubber video-scrubber-fill w-full"
-                style={{ "--progress": `${progress}%` } as React.CSSProperties}
-                data-ocid="video.scrubber.input"
-              />
-            </div>
+            {/* Progress scrubber -- HOST ONLY */}
+            {isHost && (
+              <div className="mb-2 relative">
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  value={progress}
+                  onChange={handleProgressChange}
+                  className="video-scrubber video-scrubber-fill w-full"
+                  style={
+                    { "--progress": `${progress}%` } as React.CSSProperties
+                  }
+                  data-ocid="video.scrubber.input"
+                />
+              </div>
+            )}
 
             {/* Control row */}
             <div className="flex items-center justify-between gap-3">
-              {/* Left */}
+              {/* Left: play/pause HOST ONLY, time for everyone */}
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={togglePlay}
-                  className="text-foreground hover:text-gold transition-colors"
-                  aria-label={isPlaying ? "Pause" : "Play"}
-                  data-ocid="video.play_pause.button"
-                >
-                  {isPlaying ? (
-                    <Pause className="w-5 h-5" />
-                  ) : (
-                    <Play className="w-5 h-5" />
-                  )}
-                </button>
+                {isHost && (
+                  <button
+                    type="button"
+                    onClick={togglePlay}
+                    className="text-foreground hover:text-gold transition-colors"
+                    aria-label={isPlaying ? "Pause" : "Play"}
+                    data-ocid="video.play_pause.button"
+                  >
+                    {isPlaying ? (
+                      <Pause className="w-5 h-5" />
+                    ) : (
+                      <Play className="w-5 h-5" />
+                    )}
+                  </button>
+                )}
                 <span className="text-xs text-muted-foreground tabular-nums">
                   {formatTime(currentTime)} / {formatTime(duration)}
                 </span>
@@ -376,32 +428,34 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
 
               {/* Right */}
               <div className="flex items-center gap-3">
-                {/* Volume */}
-                <div className="hidden sm:flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={toggleMute}
-                    className="text-muted-foreground hover:text-foreground transition-colors"
-                    data-ocid="video.mute.button"
-                  >
-                    {isMuted || volume === 0 ? (
-                      <VolumeX className="w-4 h-4" />
-                    ) : (
-                      <Volume2 className="w-4 h-4" />
-                    )}
-                  </button>
-                  <input
-                    type="range"
-                    min="0"
-                    max="100"
-                    value={isMuted ? 0 : Math.round(volume * 100)}
-                    onChange={handleVolumeChange}
-                    className="volume-scrubber"
-                    data-ocid="video.volume.input"
-                  />
-                </div>
+                {/* Volume -- HOST ONLY */}
+                {isHost && (
+                  <div className="hidden sm:flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={toggleMute}
+                      className="text-muted-foreground hover:text-foreground transition-colors"
+                      data-ocid="video.mute.button"
+                    >
+                      {isMuted || volume === 0 ? (
+                        <VolumeX className="w-4 h-4" />
+                      ) : (
+                        <Volume2 className="w-4 h-4" />
+                      )}
+                    </button>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      value={isMuted ? 0 : Math.round(volume * 100)}
+                      onChange={handleVolumeChange}
+                      className="volume-scrubber"
+                      data-ocid="video.volume.input"
+                    />
+                  </div>
+                )}
 
-                {/* Fullscreen */}
+                {/* Fullscreen -- everyone */}
                 <button
                   type="button"
                   onClick={toggleFullscreen}

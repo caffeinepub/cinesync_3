@@ -43,6 +43,7 @@ export const RoomState = IDL.Record({
   'isPlaying' : IDL.Bool,
   'videoSource' : IDL.Text,
   'position' : IDL.Float64,
+  'syncVersion' : IDL.Nat,
 });
 export const UserProfile = IDL.Record({ 'name' : IDL.Text });
 
@@ -77,12 +78,24 @@ export const idlService = IDL.Service({
   'assignCallerUserRole' : IDL.Func([IDL.Principal, UserRole], [], []),
   'createRoom' : IDL.Func([CreateRoomRequest], [], []),
   'deleteRoom' : IDL.Func([IDL.Text], [], []),
+  'forceSyncAll' : IDL.Func(
+      [
+        IDL.Record({
+          'isPlaying' : IDL.Bool,
+          'position' : IDL.Float64,
+          'roomCode' : IDL.Text,
+        }),
+      ],
+      [IDL.Nat],
+      [],
+    ),
   'getAllParticipants' : IDL.Func([IDL.Text], [IDL.Vec(IDL.Text)], ['query']),
   'getAllRoomStates' : IDL.Func([], [IDL.Vec(RoomState)], ['query']),
   'getCallerUserProfile' : IDL.Func([], [IDL.Opt(UserProfile)], ['query']),
   'getCallerUserRole' : IDL.Func([], [UserRole], ['query']),
   'getChatMessages' : IDL.Func([IDL.Text], [IDL.Vec(ChatMessage)], ['query']),
   'getRoomState' : IDL.Func([IDL.Text], [RoomState], ['query']),
+  'getSyncVersion' : IDL.Func([IDL.Text], [IDL.Nat], ['query']),
   'getUserProfile' : IDL.Func(
       [IDL.Principal],
       [IDL.Opt(UserProfile)],
@@ -163,6 +176,7 @@ export const idlFactory = ({ IDL }) => {
     'isPlaying' : IDL.Bool,
     'videoSource' : IDL.Text,
     'position' : IDL.Float64,
+    'syncVersion' : IDL.Nat,
   });
   const UserProfile = IDL.Record({ 'name' : IDL.Text });
   
@@ -197,12 +211,24 @@ export const idlFactory = ({ IDL }) => {
     'assignCallerUserRole' : IDL.Func([IDL.Principal, UserRole], [], []),
     'createRoom' : IDL.Func([CreateRoomRequest], [], []),
     'deleteRoom' : IDL.Func([IDL.Text], [], []),
+    'forceSyncAll' : IDL.Func(
+        [
+          IDL.Record({
+            'isPlaying' : IDL.Bool,
+            'position' : IDL.Float64,
+            'roomCode' : IDL.Text,
+          }),
+        ],
+        [IDL.Nat],
+        [],
+      ),
     'getAllParticipants' : IDL.Func([IDL.Text], [IDL.Vec(IDL.Text)], ['query']),
     'getAllRoomStates' : IDL.Func([], [IDL.Vec(RoomState)], ['query']),
     'getCallerUserProfile' : IDL.Func([], [IDL.Opt(UserProfile)], ['query']),
     'getCallerUserRole' : IDL.Func([], [UserRole], ['query']),
     'getChatMessages' : IDL.Func([IDL.Text], [IDL.Vec(ChatMessage)], ['query']),
     'getRoomState' : IDL.Func([IDL.Text], [RoomState], ['query']),
+    'getSyncVersion' : IDL.Func([IDL.Text], [IDL.Nat], ['query']),
     'getUserProfile' : IDL.Func(
         [IDL.Principal],
         [IDL.Opt(UserProfile)],

@@ -4,6 +4,7 @@ import AdminDashboard from "../components/AdminDashboard";
 import ChatPanel from "../components/ChatPanel";
 import MobileChatDrawer from "../components/MobileChatDrawer";
 import ParticipantsList from "../components/ParticipantsList";
+import RequestControls from "../components/RequestControls";
 import StickyHeader from "../components/StickyHeader";
 import VideoPlayer, { type VideoPlayerHandle } from "../components/VideoPlayer";
 import { useActor } from "../hooks/useActor";
@@ -31,67 +32,98 @@ export default function RoomPage({
   const [videoSrc, setVideoSrc] = useState("");
   const [isSynced, setIsSynced] = useState(true);
 
+  // isHost is fixed at room entry time.
+  // isHostInitial=true only when the user explicitly created the room.
+  // We do NOT recompute this from roomState to avoid nickname collisions
+  // or identity race conditions accidentally giving participants host controls.
+  const isHostRef = useRef(isHostInitial);
+  const isHost = isHostRef.current;
+
   const { roomState, isLoading, error, pushPlayback } = useSyncEngine({
     roomCode,
     enabled: true,
   });
 
-  // Determine if current user is host
-  const isHost = (() => {
-    if (!roomState) return isHostInitial;
-    const principalStr = identity?.getPrincipal().toString() ?? "";
+  // Additional identity-based host check (only upgrades guest→host if principal matches,
+  // never downgrades a confirmed host)
+  const isHostConfirmed = (() => {
+    if (isHost) return true; // already confirmed host at room creation
+    if (!roomState || !identity) return false;
+    const principalStr = identity.getPrincipal().toString();
     const creatorStr = roomState.creator?.toString?.() ?? "";
-    if (principalStr && creatorStr && principalStr === creatorStr) return true;
-    return nickname === roomState.hostNickname;
+    return !!(principalStr && creatorStr && principalStr === creatorStr);
   })();
 
-  // Sync engine: apply room state changes to video (guest only)
+  // The effective host flag used everywhere
+  const effectiveIsHost = isHost || isHostConfirmed;
+
+  // --- Participant sync engine ---
   const prevVideoSource = useRef("");
-  const prevIsPlaying = useRef<boolean | null>(null);
   const syncIgnoreUntil = useRef(0);
+  const prevSyncVersionRef = useRef<bigint>(BigInt(0));
 
   useEffect(() => {
-    if (!roomState || isHost) return;
+    if (!roomState || effectiveIsHost) return;
     const now = Date.now();
     if (now < syncIgnoreUntil.current) return;
 
     const video = videoRef.current;
     if (!video) return;
 
-    // Sync video source
+    // Detect force sync
+    const currentSyncVersion = roomState.syncVersion ?? BigInt(0);
+    const isForceSync = currentSyncVersion > prevSyncVersionRef.current;
+    if (isForceSync) prevSyncVersionRef.current = currentSyncVersion;
+
+    // New video source: use loadAndSync so we wait for canplay before seeking/playing
     if (
       roomState.videoSource &&
       roomState.videoSource !== prevVideoSource.current
     ) {
       prevVideoSource.current = roomState.videoSource;
       setVideoSrc(roomState.videoSource);
-      video.setSource(roomState.videoSource);
+      video.loadAndSync(
+        roomState.videoSource,
+        roomState.position,
+        roomState.isPlaying,
+      );
+      // Source is loading — don't run further sync logic this tick
+      return;
     }
 
-    // Sync play/pause
-    const localPaused = video.getIsPaused();
-    if (roomState.isPlaying !== prevIsPlaying.current) {
-      prevIsPlaying.current = roomState.isPlaying;
-      if (roomState.isPlaying && localPaused) {
+    if (isForceSync) {
+      video.seek(roomState.position);
+      if (roomState.isPlaying) {
         video.play();
-      } else if (!roomState.isPlaying && !localPaused) {
+      } else {
         video.pause();
       }
+      setIsSynced(true);
+      toast("Synced by host", { duration: 2000 });
+      return;
     }
 
-    // Sync position (if drift > 2s)
+    // Normal sync: reconcile play/pause state
+    const localPaused = video.getIsPaused();
+    if (roomState.isPlaying && localPaused) {
+      video.play();
+    } else if (!roomState.isPlaying && !localPaused) {
+      video.pause();
+    }
+
+    // Sync position if drift > 3s
     const localTime = video.getCurrentTime();
     const drift = Math.abs(roomState.position - localTime);
-    if (drift > 2) {
+    if (drift > 3) {
       video.seek(roomState.position);
       setIsSynced(false);
       setTimeout(() => setIsSynced(true), 1000);
     }
-  }, [roomState, isHost]);
+  }, [roomState, effectiveIsHost]);
 
-  // For host: also sync video source if changed externally (e.g. admin panel)
+  // Host: sync video source if changed externally (admin panel etc)
   useEffect(() => {
-    if (!roomState || !isHost) return;
+    if (!roomState || !effectiveIsHost) return;
     if (
       roomState.videoSource &&
       roomState.videoSource !== prevVideoSource.current
@@ -100,40 +132,53 @@ export default function RoomPage({
       setVideoSrc(roomState.videoSource);
       videoRef.current?.setSource(roomState.videoSource);
     }
-  }, [roomState, isHost]);
+  }, [roomState, effectiveIsHost]);
 
-  // Host handlers
+  // Host: continuously push position every 4s during playback (late joiners)
+  useEffect(() => {
+    if (!effectiveIsHost) return;
+    const interval = setInterval(() => {
+      const video = videoRef.current;
+      if (!video) return;
+      if (!video.getIsPaused()) {
+        pushPlayback(true, video.getCurrentTime());
+      }
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [effectiveIsHost, pushPlayback]);
+
+  // Host event handlers
   const handleVideoPlay = useCallback(
     (currentTime: number) => {
-      if (!isHost) return;
+      if (!effectiveIsHost) return;
       syncIgnoreUntil.current = Date.now() + 1000;
       pushPlayback(true, currentTime);
     },
-    [isHost, pushPlayback],
+    [effectiveIsHost, pushPlayback],
   );
 
   const handleVideoPause = useCallback(
     (currentTime: number) => {
-      if (!isHost) return;
+      if (!effectiveIsHost) return;
       syncIgnoreUntil.current = Date.now() + 1000;
       pushPlayback(false, currentTime);
     },
-    [isHost, pushPlayback],
+    [effectiveIsHost, pushPlayback],
   );
 
   const handleVideoSeeked = useCallback(
     (currentTime: number) => {
-      if (!isHost) return;
+      if (!effectiveIsHost) return;
       syncIgnoreUntil.current = Date.now() + 1000;
       const paused = videoRef.current?.getIsPaused() ?? true;
       pushPlayback(!paused, currentTime);
     },
-    [isHost, pushPlayback],
+    [effectiveIsHost, pushPlayback],
   );
 
   const handleSetSource = useCallback(
     async (src: string) => {
-      if (!isHost || !actor) return;
+      if (!effectiveIsHost || !actor) return;
       setVideoSrc(src);
       try {
         await actor.setVideoSource({ roomCode, videoSource: src });
@@ -143,8 +188,21 @@ export default function RoomPage({
         );
       }
     },
-    [isHost, actor, roomCode],
+    [effectiveIsHost, actor, roomCode],
   );
+
+  const handleForceSyncAll = useCallback(async () => {
+    if (!actor || !videoRef.current) return;
+    const currentTime = videoRef.current.getCurrentTime();
+    const isPaused = videoRef.current.getIsPaused();
+    const playing = !isPaused;
+    await actor.forceSyncAll({
+      roomCode,
+      position: currentTime,
+      isPlaying: playing,
+    });
+    pushPlayback(playing, currentTime);
+  }, [actor, roomCode, pushPlayback]);
 
   const handleLeave = useCallback(async () => {
     if (!actor) {
@@ -215,18 +273,17 @@ export default function RoomPage({
       >
         {/* Left: video + info */}
         <div className="flex flex-col flex-1 min-w-0 p-4 gap-4 overflow-y-auto">
-          {/* Video player with admin overlay */}
           <div className="relative">
             <VideoPlayer
               ref={videoRef}
               src={videoSrc}
-              isHost={isHost}
+              isHost={effectiveIsHost}
               onPlay={handleVideoPlay}
               onPause={handleVideoPause}
               onSeeked={handleVideoSeeked}
               onSetSource={handleSetSource}
             />
-            {adminUnlocked && isHost && (
+            {adminUnlocked && effectiveIsHost && (
               <AdminDashboard
                 roomCode={roomCode}
                 onClose={() => setAdminUnlocked(false)}
@@ -234,9 +291,19 @@ export default function RoomPage({
                   setVideoSrc(src);
                   videoRef.current?.setSource(src);
                 }}
+                onForceSyncAll={handleForceSyncAll}
               />
             )}
           </div>
+
+          {/* Request controls only for participants (non-hosts) */}
+          {!effectiveIsHost && (
+            <RequestControls
+              roomCode={roomCode}
+              nickname={nickname}
+              isHost={false}
+            />
+          )}
 
           {/* Room info bar */}
           <div className="flex items-center justify-between px-4 py-2.5 rounded-xl border border-border bg-card">
@@ -245,7 +312,9 @@ export default function RoomPage({
                 Room: {roomCode.toUpperCase()}
               </h1>
               <p className="text-xs text-muted-foreground mt-0.5">
-                {isHost ? "You are the host" : `Hosted by ${hostNickname}`}
+                {effectiveIsHost
+                  ? "You are the host"
+                  : `Hosted by ${hostNickname}`}
               </p>
             </div>
             <div className="flex items-center gap-1.5">
@@ -257,7 +326,6 @@ export default function RoomPage({
             </div>
           </div>
 
-          {/* Participants list */}
           <ParticipantsList
             participants={participants}
             hostNickname={hostNickname}
@@ -271,7 +339,7 @@ export default function RoomPage({
             messages={messages}
             roomCode={roomCode}
             nickname={nickname}
-            isHost={isHost}
+            isHost={effectiveIsHost}
             onAdminUnlock={() => setAdminUnlocked(true)}
             className="h-full"
           />
@@ -284,13 +352,13 @@ export default function RoomPage({
           <VideoPlayer
             ref={videoRef}
             src={videoSrc}
-            isHost={isHost}
+            isHost={effectiveIsHost}
             onPlay={handleVideoPlay}
             onPause={handleVideoPause}
             onSeeked={handleVideoSeeked}
             onSetSource={handleSetSource}
           />
-          {adminUnlocked && isHost && (
+          {adminUnlocked && effectiveIsHost && (
             <AdminDashboard
               roomCode={roomCode}
               onClose={() => setAdminUnlocked(false)}
@@ -298,12 +366,22 @@ export default function RoomPage({
                 setVideoSrc(src);
                 videoRef.current?.setSource(src);
               }}
+              onForceSyncAll={handleForceSyncAll}
             />
           )}
         </div>
 
-        {/* Participants (collapsed) */}
-        <div className="px-3 pb-3">
+        {!effectiveIsHost && (
+          <div className="px-3">
+            <RequestControls
+              roomCode={roomCode}
+              nickname={nickname}
+              isHost={false}
+            />
+          </div>
+        )}
+
+        <div className="px-3 pb-3 mt-2">
           <div className="rounded-xl border border-border bg-card px-4 py-2.5 flex items-center justify-between">
             <span className="text-xs text-muted-foreground uppercase tracking-wider">
               {participants.length} participant
@@ -332,7 +410,7 @@ export default function RoomPage({
           messages={messages}
           roomCode={roomCode}
           nickname={nickname}
-          isHost={isHost}
+          isHost={effectiveIsHost}
           onAdminUnlock={() => setAdminUnlocked(true)}
         />
       </div>

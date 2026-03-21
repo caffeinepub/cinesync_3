@@ -48,7 +48,8 @@ export function useSyncEngine({
     };
 
     poll();
-    const interval = setInterval(poll, 1500);
+    // Reduced from 1500ms to 800ms for faster sync detection
+    const interval = setInterval(poll, 800);
     return () => {
       cancelled = true;
       clearInterval(interval);
@@ -59,13 +60,14 @@ export function useSyncEngine({
     (isPlaying: boolean, position: number) => {
       if (!actor || !roomCode) return;
       if (debounceTimer.current) clearTimeout(debounceTimer.current);
+      // Reduced from 400ms to 80ms so host actions reach backend nearly instantly
       debounceTimer.current = setTimeout(async () => {
         try {
           await actor.updatePlaybackState({ isPlaying, position, roomCode });
         } catch (e) {
           console.error("Failed to push playback state", e);
         }
-      }, 400);
+      }, 80);
     },
     [actor, roomCode],
   );

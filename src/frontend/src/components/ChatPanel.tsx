@@ -2,7 +2,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { MessageSquare, Send } from "lucide-react";
+import { MessageSquare, PauseCircle, PlayCircle, Send } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { ChatMessage } from "../backend";
@@ -18,7 +18,6 @@ interface ChatPanelProps {
 }
 
 function formatTimestamp(ts: bigint): string {
-  // Motoko Time is in nanoseconds
   const ms = Number(ts / BigInt(1_000_000));
   const d = new Date(ms);
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -49,6 +48,20 @@ function avatarColor(name: string): string {
   return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
 }
 
+function parseRequestMessage(
+  message: string,
+): { type: "pause" | "play"; senderAction: string } | null {
+  if (message.startsWith("[REQ:pause]")) {
+    const rest = message.replace("[REQ:pause]", "").trim();
+    return { type: "pause", senderAction: rest || "requests a pause" };
+  }
+  if (message.startsWith("[REQ:play]")) {
+    const rest = message.replace("[REQ:play]", "").trim();
+    return { type: "play", senderAction: rest || "requests play" };
+  }
+  return null;
+}
+
 export default function ChatPanel({
   messages,
   roomCode,
@@ -70,7 +83,6 @@ export default function ChatPanel({
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
-    // Admin unlock trigger
     if (val === "121219" && isHost) {
       setInputValue("");
       onAdminUnlock?.();
@@ -82,7 +94,6 @@ export default function ChatPanel({
   const handleSend = async () => {
     const msg = inputValue.trim();
     if (!msg || !actor || sending) return;
-    // Double-check not sending admin code
     if (msg === "121219") {
       setInputValue("");
       return;
@@ -128,34 +139,70 @@ export default function ChatPanel({
               No messages yet. Say hello!
             </div>
           ) : (
-            messages.map((msg, i) => (
-              <div
-                key={`${msg.sender}-${String(msg.timestamp)}-${i}`}
-                className="flex items-start gap-2.5"
-                data-ocid={`chat.item.${i + 1}`}
-              >
-                <Avatar className="w-7 h-7 shrink-0">
-                  <AvatarFallback
-                    className={`text-xs font-medium ${avatarColor(msg.sender)}`}
+            messages.map((msg, i) => {
+              const req = parseRequestMessage(msg.message);
+              if (req) {
+                return (
+                  <div
+                    key={`${msg.sender}-${String(msg.timestamp)}-${i}`}
+                    className="flex items-start gap-2.5 rounded-lg border-l-2 border-amber-500/60 bg-amber-500/10 px-3 py-2"
+                    data-ocid={`chat.item.${i + 1}`}
                   >
-                    {getInitials(msg.sender)}
-                  </AvatarFallback>
-                </Avatar>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-xs font-semibold text-foreground">
-                      {msg.sender}
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      {formatTimestamp(msg.timestamp)}
-                    </span>
+                    <div className="mt-0.5 shrink-0">
+                      {req.type === "pause" ? (
+                        <PauseCircle className="w-4 h-4 text-amber-400" />
+                      ) : (
+                        <PlayCircle className="w-4 h-4 text-green-400" />
+                      )}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs font-semibold text-foreground">
+                          {msg.sender}
+                        </span>
+                        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-500/20 text-amber-400 border border-amber-500/30">
+                          Viewer Request
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {formatTimestamp(msg.timestamp)}
+                        </span>
+                      </div>
+                      <p className="text-xs text-amber-300/80 leading-relaxed mt-0.5">
+                        {req.senderAction}
+                      </p>
+                    </div>
                   </div>
-                  <p className="text-xs text-muted-foreground leading-relaxed mt-0.5 break-words">
-                    {msg.message}
-                  </p>
+                );
+              }
+              return (
+                <div
+                  key={`${msg.sender}-${String(msg.timestamp)}-${i}`}
+                  className="flex items-start gap-2.5"
+                  data-ocid={`chat.item.${i + 1}`}
+                >
+                  <Avatar className="w-7 h-7 shrink-0">
+                    <AvatarFallback
+                      className={`text-xs font-medium ${avatarColor(msg.sender)}`}
+                    >
+                      {getInitials(msg.sender)}
+                    </AvatarFallback>
+                  </Avatar>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-xs font-semibold text-foreground">
+                        {msg.sender}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {formatTimestamp(msg.timestamp)}
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground leading-relaxed mt-0.5 break-words">
+                      {msg.message}
+                    </p>
+                  </div>
                 </div>
-              </div>
-            ))
+              );
+            })
           )}
           <div ref={bottomRef} />
         </div>
