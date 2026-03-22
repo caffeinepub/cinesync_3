@@ -27,7 +27,16 @@ export function useActor() {
 
       const actor = await createActorWithConfig(actorOptions);
       const adminToken = getSecretParameter("caffeineAdminToken") || "";
-      await actor._initializeAccessControlWithSecret(adminToken);
+      // Fire in background — never block actor creation on this call.
+      // If it fails the user will be registered on the next attempt.
+      actor
+        ._initializeAccessControlWithSecret(adminToken)
+        .catch((e: unknown) => {
+          console.warn(
+            "[useActor] _initializeAccessControlWithSecret failed (will retry on next action):",
+            e,
+          );
+        });
       return actor;
     },
     // Only refetch when identity changes

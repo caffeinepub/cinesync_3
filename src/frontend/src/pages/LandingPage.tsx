@@ -20,6 +20,7 @@ import { toast } from "sonner";
 import { useActor } from "../hooks/useActor";
 import { useInternetIdentity } from "../hooks/useInternetIdentity";
 import { useStorageClient } from "../hooks/useStorageClient";
+import { getSecretParameter } from "../utils/urlParams";
 
 interface LandingPageProps {
   onEnterRoom: (roomCode: string, nickname: string, isHost: boolean) => void;
@@ -74,14 +75,23 @@ function LibraryPanel({ onClose }: { onClose: () => void }) {
 
   const fetchLibrary = async () => {
     if (!actor) return;
-    try {
-      const items = await (actor as any).getLibrary();
-      setLibrary(items);
-    } catch {
-      toast.error("Failed to load library");
-    } finally {
-      setLoading(false);
+    // Retry up to 3 times with backoff for transient canister errors
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const items = await (actor as any).getLibrary();
+        setLibrary(items);
+        setLoading(false);
+        return;
+      } catch (e) {
+        lastErr = e;
+        if (attempt < 2)
+          await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
+      }
     }
+    console.error("[fetchLibrary] failed after 3 attempts:", lastErr);
+    toast.error("Failed to load library — please try again");
+    setLoading(false);
   };
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: fetchLibrary is stable within render
@@ -97,10 +107,31 @@ function LibraryPanel({ onClose }: { onClose: () => void }) {
     library.find((item) => Number(item.slot) === slotIndex) ?? null;
 
   const handleUpload = async (slotIndex: number, file: File) => {
-    if (!actor || !storageClient) {
-      toast.error("Storage not ready");
+    if (!actor) {
+      toast.error("Backend not ready — please wait a moment and try again");
       return;
     }
+    if (!storageClient) {
+      toast.error("Storage initializing — please try again in a moment");
+      return;
+    }
+    if (!isAuthenticated) {
+      toast.error("Please sign in to upload to the library");
+      return;
+    }
+
+    // Ensure the user is registered in the access control system.
+    // _initializeAccessControlWithSecret is idempotent — already-registered
+    // users are skipped. This fixes "User is not registered" traps when the
+    // background init in useActor.ts hasn't completed yet.
+    try {
+      const adminToken = getSecretParameter("caffeineAdminToken") || "";
+      await (actor as any)._initializeAccessControlWithSecret(adminToken);
+    } catch {
+      // Either already registered (safe to ignore) or canister issue
+      // — let setLibrarySlot surface the real error below if needed.
+    }
+
     setUploadingSlot(slotIndex);
     setUploadProgress(0);
     try {
@@ -113,7 +144,14 @@ function LibraryPanel({ onClose }: { onClose: () => void }) {
       toast.success(`Slot ${slotIndex + 1} saved!`);
       await fetchLibrary();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Upload failed");
+      let message = "Upload failed";
+      if (err instanceof Error) {
+        const trapMatch = err.message.match(
+          /trapped explicitly: (.+?)(?:\n|$)/,
+        );
+        message = trapMatch ? trapMatch[1] : err.message;
+      }
+      toast.error(message);
     } finally {
       setUploadingSlot(null);
       setUploadProgress(0);
@@ -242,14 +280,16 @@ function LibraryPanel({ onClose }: { onClose: () => void }) {
                             <label
                               htmlFor={`lib-replace-${slotIndex}`}
                               className={`p-1.5 rounded-lg transition-colors ${
-                                isStorageLoading || isUploading
+                                isStorageLoading || isUploading || !actor
                                   ? "opacity-50 cursor-not-allowed text-muted-foreground"
                                   : "cursor-pointer text-muted-foreground hover:text-gold hover:bg-gold/10"
                               }`}
                               title={
-                                isStorageLoading
-                                  ? "Storage initializing..."
-                                  : "Replace video"
+                                !actor
+                                  ? "Backend connecting..."
+                                  : isStorageLoading
+                                    ? "Storage initializing..."
+                                    : "Replace video"
                               }
                               data-ocid={`library.upload_button.${slotIndex + 1}`}
                             >
@@ -264,7 +304,9 @@ function LibraryPanel({ onClose }: { onClose: () => void }) {
                                 type="file"
                                 accept="video/*,.mkv,video/x-matroska"
                                 className="hidden"
-                                disabled={isUploading || isStorageLoading}
+                                disabled={
+                                  isUploading || isStorageLoading || !actor
+                                }
                                 onChange={(e) => {
                                   const file = e.target.files?.[0];
                                   if (file) handleUpload(slotIndex, file);
@@ -291,25 +333,31 @@ function LibraryPanel({ onClose }: { onClose: () => void }) {
                           <label
                             htmlFor={`lib-upload-${slotIndex}`}
                             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
-                              isStorageLoading || isUploading
+                              isStorageLoading || isUploading || !actor
                                 ? "opacity-50 cursor-not-allowed bg-gold/5 border-gold/20 text-gold/60"
                                 : "cursor-pointer bg-gold/10 border-gold/30 text-gold hover:bg-gold/20"
                             }`}
                             data-ocid={`library.upload_button.${slotIndex + 1}`}
                           >
-                            {isStorageLoading ? (
+                            {isStorageLoading || !actor ? (
                               <Loader2 className="w-3.5 h-3.5 animate-spin" />
                             ) : (
                               <Upload className="w-3.5 h-3.5" />
                             )}
-                            {isStorageLoading ? "Initializing..." : "Upload"}
+                            {!actor
+                              ? "Connecting..."
+                              : isStorageLoading
+                                ? "Initializing..."
+                                : "Upload"}
                             <input
                               id={`lib-upload-${slotIndex}`}
                               ref={fileInputRefs[slotIndex]}
                               type="file"
                               accept="video/*,.mkv,video/x-matroska"
                               className="hidden"
-                              disabled={isUploading || isStorageLoading}
+                              disabled={
+                                isUploading || isStorageLoading || !actor
+                              }
                               onChange={(e) => {
                                 const file = e.target.files?.[0];
                                 if (file) handleUpload(slotIndex, file);
@@ -328,7 +376,11 @@ function LibraryPanel({ onClose }: { onClose: () => void }) {
                       >
                         <div className="flex justify-between text-xs text-muted-foreground">
                           <span>Uploading to network...</span>
-                          <span>{uploadProgress}%</span>
+                          <span>
+                            {uploadProgress === 0
+                              ? "Preparing upload..."
+                              : `Uploading to network... ${uploadProgress}%`}
+                          </span>
                         </div>
                         <div className="w-full bg-card rounded-full h-1.5">
                           <div
