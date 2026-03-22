@@ -13,14 +13,35 @@ interface LandingPageProps {
   onEnterRoom: (roomCode: string, nickname: string, isHost: boolean) => void;
 }
 
+async function withRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const isCanisterError =
+        msg.includes("IC0508") ||
+        msg.includes("IC0537") ||
+        msg.includes("canister stopped") ||
+        msg.includes("no wasm module");
+      if (isCanisterError && attempt < maxAttempts) {
+        await new Promise((r) => setTimeout(r, 1500 * attempt));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error("Max retries exceeded");
+}
+
 export default function LandingPage({ onEnterRoom }: LandingPageProps) {
   const { identity, login, clear, loginStatus } = useInternetIdentity();
   const {
     actor,
     isFetching: actorFetching,
-    isError: actorIsError,
+    isError: actorError,
+    refetch: refetchActor,
   } = useActor();
-  const actorError = actorIsError && !actorFetching;
   const qc = useQueryClient();
 
   const [createCode, setCreateCode] = useState("");
@@ -44,8 +65,8 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
       return;
     }
     if (!actor) {
-      if (actorError) {
-        toast.error("Backend unavailable — please refresh the page");
+      if (!actorFetching) {
+        toast.error("Backend unavailable — please use the Retry button");
       } else {
         toast.error(
           "Still connecting to backend, please try again in a moment",
@@ -55,10 +76,12 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
     }
     setCreateLoading(true);
     try {
-      await actor.createRoom({
-        roomCode: createCode.trim(),
-        hostNickname: createNickname.trim(),
-      });
+      await withRetry(() =>
+        actor.createRoom({
+          roomCode: createCode.trim(),
+          hostNickname: createNickname.trim(),
+        }),
+      );
       qc.invalidateQueries({ queryKey: ["roomState", createCode.trim()] });
       onEnterRoom(createCode.trim(), createNickname.trim(), true);
     } catch (err) {
@@ -74,8 +97,8 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
       return;
     }
     if (!actor) {
-      if (actorError) {
-        toast.error("Backend unavailable — please refresh the page");
+      if (!actorFetching) {
+        toast.error("Backend unavailable — please use the Retry button");
       } else {
         toast.error(
           "Still connecting to backend, please try again in a moment",
@@ -85,7 +108,9 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
     }
     setJoinLoading(true);
     try {
-      await actor.joinRoom(joinCode.trim(), joinNickname.trim());
+      await withRetry(() =>
+        actor.joinRoom(joinCode.trim(), joinNickname.trim()),
+      );
       qc.invalidateQueries({ queryKey: ["roomState", joinCode.trim()] });
       onEnterRoom(joinCode.trim(), joinNickname.trim(), false);
     } catch (err) {
@@ -112,20 +137,17 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
     }
   };
 
-  // Derive create button state
-  const isConnecting = actorFetching && isAuthenticated && !actorError;
   const hasBackendError = actorError && isAuthenticated;
+  const isConnecting = actorFetching && isAuthenticated;
 
   const createButtonLabel = createLoading
     ? "Creating..."
-    : hasBackendError
-      ? "Backend Error — Refresh"
-      : isConnecting
-        ? "Connecting..."
-        : "Create Room";
+    : isConnecting
+      ? "Connecting..."
+      : "Create Room";
 
   const createButtonDisabled =
-    !isAuthenticated || createLoading || hasBackendError;
+    !isAuthenticated || createLoading || (hasBackendError && !actorFetching);
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -264,10 +286,18 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
 
             {hasBackendError && (
               <div
-                className="rounded-lg bg-destructive/10 border border-destructive/30 p-3 text-sm text-destructive"
+                className="rounded-lg bg-destructive/10 border border-destructive/30 p-3 text-sm text-destructive flex items-center justify-between gap-2"
                 data-ocid="create.error_state"
               >
-                Backend connection failed. Please refresh the page to try again.
+                <span>Backend connection failed.</span>
+                <button
+                  type="button"
+                  onClick={() => refetchActor()}
+                  className="text-destructive font-semibold underline hover:no-underline"
+                  data-ocid="create.retry.button"
+                >
+                  Retry
+                </button>
               </div>
             )}
 
@@ -337,10 +367,18 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
 
             {actorError && (
               <div
-                className="rounded-lg bg-destructive/10 border border-destructive/30 p-3 text-sm text-destructive"
+                className="rounded-lg bg-destructive/10 border border-destructive/30 p-3 text-sm text-destructive flex items-center justify-between gap-2"
                 data-ocid="join.error_state"
               >
-                Backend connection failed. Please refresh the page to try again.
+                <span>Backend connection failed.</span>
+                <button
+                  type="button"
+                  onClick={() => refetchActor()}
+                  className="text-destructive font-semibold underline hover:no-underline"
+                  data-ocid="join.retry.button"
+                >
+                  Retry
+                </button>
               </div>
             )}
 

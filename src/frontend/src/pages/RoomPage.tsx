@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import AdminDashboard from "../components/AdminDashboard";
 import ChatPanel from "../components/ChatPanel";
-import MobileChatDrawer from "../components/MobileChatDrawer";
 import ParticipantsList from "../components/ParticipantsList";
 import RequestControls from "../components/RequestControls";
 import StickyHeader from "../components/StickyHeader";
@@ -27,15 +26,12 @@ export default function RoomPage({
   const { identity } = useInternetIdentity();
   const { actor } = useActor();
 
+  const rootRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<VideoPlayerHandle | null>(null);
   const [adminUnlocked, setAdminUnlocked] = useState(false);
   const [videoSrc, setVideoSrc] = useState("");
   const [isSynced, setIsSynced] = useState(true);
 
-  // isHost is fixed at room entry time.
-  // isHostInitial=true only when the user explicitly created the room.
-  // We do NOT recompute this from roomState to avoid nickname collisions
-  // or identity race conditions accidentally giving participants host controls.
   const isHostRef = useRef(isHostInitial);
   const isHost = isHostRef.current;
 
@@ -44,20 +40,16 @@ export default function RoomPage({
     enabled: true,
   });
 
-  // Additional identity-based host check (only upgrades guest→host if principal matches,
-  // never downgrades a confirmed host)
   const isHostConfirmed = (() => {
-    if (isHost) return true; // already confirmed host at room creation
+    if (isHost) return true;
     if (!roomState || !identity) return false;
     const principalStr = identity.getPrincipal().toString();
     const creatorStr = roomState.creator?.toString?.() ?? "";
     return !!(principalStr && creatorStr && principalStr === creatorStr);
   })();
 
-  // The effective host flag used everywhere
   const effectiveIsHost = isHost || isHostConfirmed;
 
-  // --- Participant sync engine ---
   const prevVideoSource = useRef("");
   const syncIgnoreUntil = useRef(0);
   const prevSyncVersionRef = useRef<bigint>(BigInt(0));
@@ -70,12 +62,10 @@ export default function RoomPage({
     const video = videoRef.current;
     if (!video) return;
 
-    // Detect force sync
     const currentSyncVersion = roomState.syncVersion ?? BigInt(0);
     const isForceSync = currentSyncVersion > prevSyncVersionRef.current;
     if (isForceSync) prevSyncVersionRef.current = currentSyncVersion;
 
-    // New video source: use loadAndSync so we wait for canplay before seeking/playing
     if (
       roomState.videoSource &&
       roomState.videoSource !== prevVideoSource.current
@@ -87,7 +77,6 @@ export default function RoomPage({
         roomState.position,
         roomState.isPlaying,
       );
-      // Source is loading — don't run further sync logic this tick
       return;
     }
 
@@ -103,7 +92,6 @@ export default function RoomPage({
       return;
     }
 
-    // Normal sync: reconcile play/pause state
     const localPaused = video.getIsPaused();
     if (roomState.isPlaying && localPaused) {
       video.play();
@@ -111,7 +99,6 @@ export default function RoomPage({
       video.pause();
     }
 
-    // Sync position if drift > 3s
     const localTime = video.getCurrentTime();
     const drift = Math.abs(roomState.position - localTime);
     if (drift > 3) {
@@ -121,7 +108,6 @@ export default function RoomPage({
     }
   }, [roomState, effectiveIsHost]);
 
-  // Host: sync video source if changed externally (admin panel etc)
   useEffect(() => {
     if (!roomState || !effectiveIsHost) return;
     if (
@@ -134,7 +120,6 @@ export default function RoomPage({
     }
   }, [roomState, effectiveIsHost]);
 
-  // Host: continuously push position every 4s during playback (late joiners)
   useEffect(() => {
     if (!effectiveIsHost) return;
     const interval = setInterval(() => {
@@ -147,7 +132,6 @@ export default function RoomPage({
     return () => clearInterval(interval);
   }, [effectiveIsHost, pushPlayback]);
 
-  // Host event handlers
   const handleVideoPlay = useCallback(
     (currentTime: number) => {
       if (!effectiveIsHost) return;
@@ -258,7 +242,10 @@ export default function RoomPage({
   }
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
+    <div
+      ref={rootRef}
+      className="h-screen overflow-hidden bg-background flex flex-col"
+    >
       <StickyHeader
         roomCode={roomCode}
         participantCount={participants.length}
@@ -266,14 +253,14 @@ export default function RoomPage({
         onLeave={handleLeave}
       />
 
-      {/* Desktop layout */}
-      <div
-        className="hidden md:flex flex-1 gap-0 overflow-hidden"
-        style={{ height: "calc(100vh - 56px)" }}
-      >
-        {/* Left: video + info */}
-        <div className="flex flex-col flex-1 min-w-0 p-4 gap-4 overflow-y-auto">
-          <div className="relative">
+      {/* Main layout: 70% video / 30% chat — both desktop and mobile */}
+      <div className="flex flex-1 overflow-hidden min-h-0">
+        {/* Left / top: video area (70%) */}
+        <div
+          className="flex flex-col overflow-y-auto"
+          style={{ flex: "7", minWidth: 0 }}
+        >
+          <div className="p-3 md:p-4 relative">
             <VideoPlayer
               ref={videoRef}
               src={videoSrc}
@@ -282,6 +269,7 @@ export default function RoomPage({
               onPause={handleVideoPause}
               onSeeked={handleVideoSeeked}
               onSetSource={handleSetSource}
+              fullscreenContainerRef={rootRef}
             />
             {adminUnlocked && effectiveIsHost && (
               <AdminDashboard
@@ -296,17 +284,18 @@ export default function RoomPage({
             )}
           </div>
 
-          {/* Request controls only for participants (non-hosts) */}
           {!effectiveIsHost && (
-            <RequestControls
-              roomCode={roomCode}
-              nickname={nickname}
-              isHost={false}
-            />
+            <div className="px-3 md:px-4">
+              <RequestControls
+                roomCode={roomCode}
+                nickname={nickname}
+                isHost={false}
+              />
+            </div>
           )}
 
           {/* Room info bar */}
-          <div className="flex items-center justify-between px-4 py-2.5 rounded-xl border border-border bg-card">
+          <div className="mx-3 md:mx-4 mt-2 mb-3 flex items-center justify-between px-4 py-2.5 rounded-xl border border-border bg-card">
             <div>
               <h1 className="text-sm font-semibold text-foreground">
                 Room: {roomCode.toUpperCase()}
@@ -320,76 +309,6 @@ export default function RoomPage({
             <div className="flex items-center gap-1.5">
               <span
                 className="w-2 h-2 rounded-full"
-                style={{ backgroundColor: "oklch(var(--status-green))" }}
-              />
-              <span className="text-xs text-muted-foreground">Live</span>
-            </div>
-          </div>
-
-          <ParticipantsList
-            participants={participants}
-            hostNickname={hostNickname}
-            currentNickname={nickname}
-          />
-        </div>
-
-        {/* Right: chat */}
-        <div className="w-80 xl:w-96 border-l border-border flex flex-col p-4">
-          <ChatPanel
-            messages={messages}
-            roomCode={roomCode}
-            nickname={nickname}
-            isHost={effectiveIsHost}
-            onAdminUnlock={() => setAdminUnlocked(true)}
-            className="h-full"
-          />
-        </div>
-      </div>
-
-      {/* Mobile layout */}
-      <div className="md:hidden flex flex-col flex-1 pb-14">
-        <div className="p-3 relative">
-          <VideoPlayer
-            ref={videoRef}
-            src={videoSrc}
-            isHost={effectiveIsHost}
-            onPlay={handleVideoPlay}
-            onPause={handleVideoPause}
-            onSeeked={handleVideoSeeked}
-            onSetSource={handleSetSource}
-          />
-          {adminUnlocked && effectiveIsHost && (
-            <AdminDashboard
-              roomCode={roomCode}
-              onClose={() => setAdminUnlocked(false)}
-              onVideoSourceChange={(src) => {
-                setVideoSrc(src);
-                videoRef.current?.setSource(src);
-              }}
-              onForceSyncAll={handleForceSyncAll}
-            />
-          )}
-        </div>
-
-        {!effectiveIsHost && (
-          <div className="px-3">
-            <RequestControls
-              roomCode={roomCode}
-              nickname={nickname}
-              isHost={false}
-            />
-          </div>
-        )}
-
-        <div className="px-3 pb-3 mt-2">
-          <div className="rounded-xl border border-border bg-card px-4 py-2.5 flex items-center justify-between">
-            <span className="text-xs text-muted-foreground uppercase tracking-wider">
-              {participants.length} participant
-              {participants.length !== 1 ? "s" : ""}
-            </span>
-            <div className="flex items-center gap-1.5">
-              <span
-                className="w-2 h-2 rounded-full"
                 style={{
                   backgroundColor: isSynced
                     ? "oklch(var(--status-green))"
@@ -397,22 +316,35 @@ export default function RoomPage({
                 }}
               />
               <span className="text-xs text-muted-foreground">
-                {isSynced ? "Synced" : "Syncing"}
+                {isSynced ? "Live" : "Syncing"}
               </span>
             </div>
           </div>
-        </div>
-      </div>
 
-      {/* Mobile chat drawer */}
-      <div className="md:hidden">
-        <MobileChatDrawer
-          messages={messages}
-          roomCode={roomCode}
-          nickname={nickname}
-          isHost={effectiveIsHost}
-          onAdminUnlock={() => setAdminUnlocked(true)}
-        />
+          {/* Participants list — hidden on small screens to save space */}
+          <div className="hidden md:block px-4 pb-4">
+            <ParticipantsList
+              participants={participants}
+              hostNickname={hostNickname}
+              currentNickname={nickname}
+            />
+          </div>
+        </div>
+
+        {/* Right / bottom: chat (30%) */}
+        <div
+          className="flex flex-col border-l border-border"
+          style={{ flex: "3", minWidth: 0 }}
+        >
+          <ChatPanel
+            messages={messages}
+            roomCode={roomCode}
+            nickname={nickname}
+            isHost={effectiveIsHost}
+            onAdminUnlock={() => setAdminUnlocked(true)}
+            className="h-full rounded-none border-0"
+          />
+        </div>
       </div>
     </div>
   );

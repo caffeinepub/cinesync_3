@@ -1,7 +1,6 @@
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { MessageSquare, PauseCircle, PlayCircle, Send } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -73,11 +72,12 @@ export default function ChatPanel({
   const { actor } = useActor();
   const [inputValue, setInputValue] = useState("");
   const [sending, setSending] = useState(false);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (messages.length > 0) {
-      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (messages.length > 0 && scrollContainerRef.current) {
+      scrollContainerRef.current.scrollTop =
+        scrollContainerRef.current.scrollHeight;
     }
   }, [messages]);
 
@@ -129,7 +129,10 @@ export default function ChatPanel({
       </div>
 
       {/* Message list */}
-      <ScrollArea className="flex-1 px-3">
+      <div
+        ref={scrollContainerRef}
+        className="flex-1 overflow-y-auto px-3 min-h-0"
+      >
         <div className="py-3 flex flex-col gap-3">
           {messages.length === 0 ? (
             <div
@@ -204,9 +207,8 @@ export default function ChatPanel({
               );
             })
           )}
-          <div ref={bottomRef} />
         </div>
-      </ScrollArea>
+      </div>
 
       {/* Composer */}
       <div className="px-3 py-3 border-t border-border flex gap-2 shrink-0">

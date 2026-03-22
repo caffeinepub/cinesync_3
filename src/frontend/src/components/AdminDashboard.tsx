@@ -96,7 +96,6 @@ export default function AdminDashboard({
           transition={{ type: "spring", damping: 25, stiffness: 350 }}
           className="w-full max-w-sm mx-4 rounded-xl border border-gold/30 bg-card shadow-panel overflow-hidden"
         >
-          {/* Header */}
           <div className="flex items-center justify-between px-5 py-4 border-b border-border">
             <div>
               <h2 className="text-sm font-semibold text-foreground">
@@ -116,7 +115,6 @@ export default function AdminDashboard({
             </button>
           </div>
 
-          {/* Tabs */}
           <div className="p-5 space-y-4">
             <Tabs defaultValue="url">
               <TabsList className="w-full bg-secondary border border-border mb-4">
@@ -143,7 +141,7 @@ export default function AdminDashboard({
                   value={urlValue}
                   onChange={(e) => setUrlValue(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleApplyUrl()}
-                  placeholder="https://... MP4 or HLS (.m3u8)"
+                  placeholder="https://... MP4, MKV, or HLS (.m3u8)"
                   className="bg-secondary border-border text-foreground placeholder:text-muted-foreground text-sm h-10"
                   data-ocid="admin.url.input"
                 />
@@ -176,13 +174,13 @@ export default function AdminDashboard({
                       Choose video file
                     </p>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                      MP4, MOV, WebM supported
+                      MP4, MKV, MOV, WebM supported
                     </p>
                   </div>
                   <input
                     id="video-file-upload"
                     type="file"
-                    accept="video/*"
+                    accept="video/*,.mkv,video/x-matroska"
                     className="hidden"
                     onChange={handleFileUpload}
                     disabled={uploading || !storageClient}
@@ -214,7 +212,6 @@ export default function AdminDashboard({
               </TabsContent>
             </Tabs>
 
-            {/* Force Sync Section */}
             <div className="pt-1 border-t border-border">
               <p className="text-xs text-muted-foreground mb-2.5">
                 Override playback state for ALL viewers

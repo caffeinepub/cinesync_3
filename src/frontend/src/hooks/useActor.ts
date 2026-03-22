@@ -18,21 +18,17 @@ export function useActor() {
         return await createActorWithConfig();
       }
 
-      const actorOptions = {
-        agentOptions: {
-          identity,
-        },
-      };
-
+      const actorOptions = { agentOptions: { identity } };
       const actor = await createActorWithConfig(actorOptions);
-      // Fire and forget — do NOT await this, it must never block actor readiness
+      // Fire in background — never block actor return
       const adminToken = getSecretParameter("caffeineAdminToken") || "";
       actor._initializeAccessControlWithSecret(adminToken).catch(() => {});
       return actor;
     },
     staleTime: Number.POSITIVE_INFINITY,
-    retry: 2,
     enabled: true,
+    retry: 3,
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 10000),
   });
 
   useEffect(() => {
@@ -50,5 +46,6 @@ export function useActor() {
     actor: actorQuery.data || null,
     isFetching: actorQuery.isFetching,
     isError: actorQuery.isError,
+    refetch: actorQuery.refetch,
   };
 }

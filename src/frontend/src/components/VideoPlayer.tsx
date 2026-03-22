@@ -3,11 +3,15 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import {
   Check,
+  ChevronDown,
+  Languages,
   Maximize,
   Minimize,
   Pause,
   Play,
   Settings,
+  Smartphone,
+  Subtitles,
   Volume2,
   VolumeX,
   X,
@@ -26,10 +30,6 @@ export interface VideoPlayerHandle {
   play: () => void;
   pause: () => void;
   setSource: (src: string) => void;
-  /**
-   * Load a new source, seek to position, and optionally play —
-   * waits for the video to be ready before seeking/playing.
-   */
   loadAndSync: (src: string, position: number, shouldPlay: boolean) => void;
   getCurrentTime: () => number;
   getIsPaused: () => boolean;
@@ -42,6 +42,22 @@ interface VideoPlayerProps {
   onPause?: (currentTime: number) => void;
   onSeeked?: (currentTime: number) => void;
   onSetSource?: (src: string) => void;
+  fullscreenContainerRef?: React.RefObject<HTMLDivElement | null>;
+}
+
+interface AudioTrackInfo {
+  id: string;
+  label: string;
+  language: string;
+  enabled: boolean;
+}
+
+interface TextTrackInfo {
+  index: number;
+  label: string;
+  language: string;
+  kind: string;
+  mode: TextTrackMode;
 }
 
 function formatTime(seconds: number): string {
@@ -55,13 +71,23 @@ function formatTime(seconds: number): string {
 }
 
 const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
-  ({ src, isHost, onPlay, onPause, onSeeked, onSetSource }, ref) => {
+  (
+    {
+      src,
+      isHost,
+      onPlay,
+      onPause,
+      onSeeked,
+      onSetSource,
+      fullscreenContainerRef,
+    },
+    ref,
+  ) => {
     const videoRef = useRef<HTMLVideoElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     const lastTimeUpdateRef = useRef(0);
     const internalTimeRef = useRef(0);
-    // Track pending canplay listeners to clean up on unmount
     const pendingCanPlayRef = useRef<(() => void) | null>(null);
 
     const [isPlaying, setIsPlaying] = useState(false);
@@ -70,16 +96,81 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
     const [volume, setVolume] = useState(1);
     const [isMuted, setIsMuted] = useState(false);
     const [isFullscreen, setIsFullscreen] = useState(false);
+    const [isLandscape, setIsLandscape] = useState(false);
     const [controlsVisible, setControlsVisible] = useState(true);
     const [showUrlInput, setShowUrlInput] = useState(false);
     const [urlInputValue, setUrlInputValue] = useState(src || "");
     const [hasSrc, setHasSrc] = useState(!!src);
 
+    // Track panels
+    const [audioTracks, setAudioTracks] = useState<AudioTrackInfo[]>([]);
+    const [textTracks, setTextTracks] = useState<TextTrackInfo[]>([]);
+    const [showLangMenu, setShowLangMenu] = useState(false);
+    const [showSubMenu, setShowSubMenu] = useState(false);
+    const [activeSubIndex, setActiveSubIndex] = useState<number | null>(null);
+
+    // Refresh track lists from video element
+    const refreshTracks = useCallback(() => {
+      const video = videoRef.current;
+      if (!video) return;
+
+      // Audio tracks (Firefox + some browsers)
+      const at = (video as any).audioTracks as
+        | {
+            length: number;
+            [index: number]: {
+              id: string;
+              label: string;
+              language: string;
+              enabled: boolean;
+            };
+          }
+        | undefined;
+      if (at && at.length > 1) {
+        const tracks: AudioTrackInfo[] = [];
+        for (let i = 0; i < at.length; i++) {
+          const t = at[i] as any;
+          tracks.push({
+            id: t.id || String(i),
+            label: t.label || t.language || `Track ${i + 1}`,
+            language: t.language || "",
+            enabled: t.enabled,
+          });
+        }
+        setAudioTracks(tracks);
+      } else {
+        setAudioTracks([]);
+      }
+
+      // Text tracks (subtitles/captions)
+      const tt = video.textTracks;
+      if (tt && tt.length > 0) {
+        const tracks: TextTrackInfo[] = [];
+        for (let i = 0; i < tt.length; i++) {
+          const t = tt[i];
+          if (
+            t.kind === "subtitles" ||
+            t.kind === "captions" ||
+            t.kind === "descriptions"
+          ) {
+            tracks.push({
+              index: i,
+              label: t.label || t.language || `Subtitle ${tracks.length + 1}`,
+              language: t.language || "",
+              kind: t.kind,
+              mode: t.mode,
+            });
+          }
+        }
+        setTextTracks(tracks);
+      } else {
+        setTextTracks([]);
+      }
+    }, []);
+
     useImperativeHandle(ref, () => ({
       seek: (time: number) => {
-        if (videoRef.current) {
-          videoRef.current.currentTime = time;
-        }
+        if (videoRef.current) videoRef.current.currentTime = time;
       },
       play: () => {
         videoRef.current?.play().catch(() => {});
@@ -98,24 +189,18 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
       loadAndSync: (newSrc: string, position: number, shouldPlay: boolean) => {
         const video = videoRef.current;
         if (!video || !newSrc) return;
-
-        // Remove any previously registered canplay listener
         if (pendingCanPlayRef.current) {
           video.removeEventListener("canplay", pendingCanPlayRef.current);
           pendingCanPlayRef.current = null;
         }
-
         const onCanPlay = () => {
           video.removeEventListener("canplay", onCanPlay);
           pendingCanPlayRef.current = null;
           video.currentTime = position;
-          if (shouldPlay) {
-            video.play().catch(() => {});
-          }
+          if (shouldPlay) video.play().catch(() => {});
         };
         pendingCanPlayRef.current = onCanPlay;
         video.addEventListener("canplay", onCanPlay);
-
         video.src = newSrc;
         video.load();
         setHasSrc(true);
@@ -125,7 +210,6 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
       getIsPaused: () => videoRef.current?.paused ?? true,
     }));
 
-    // Cleanup pending listener on unmount
     useEffect(() => {
       return () => {
         const video = videoRef.current;
@@ -135,7 +219,6 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
       };
     }, []);
 
-    // Sync src prop changes
     useEffect(() => {
       if (src && videoRef.current && src !== videoRef.current.src) {
         videoRef.current.src = src;
@@ -147,10 +230,42 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
 
     // Fullscreen listener
     useEffect(() => {
-      const handler = () => setIsFullscreen(!!document.fullscreenElement);
+      const handler = () => {
+        const inFullscreen = !!(
+          document.fullscreenElement ||
+          (document as any).webkitFullscreenElement
+        );
+        setIsFullscreen(inFullscreen);
+        if (!inFullscreen) {
+          setIsLandscape(false);
+          try {
+            (screen.orientation as any).unlock();
+          } catch {
+            /* ignore */
+          }
+        }
+      };
       document.addEventListener("fullscreenchange", handler);
-      return () => document.removeEventListener("fullscreenchange", handler);
+      document.addEventListener("webkitfullscreenchange", handler);
+      return () => {
+        document.removeEventListener("fullscreenchange", handler);
+        document.removeEventListener("webkitfullscreenchange", handler);
+      };
     }, []);
+
+    // Close track menus on click outside
+    useEffect(() => {
+      if (!showLangMenu && !showSubMenu) return;
+      const close = (e: MouseEvent) => {
+        const target = e.target as HTMLElement;
+        if (!target.closest("[data-track-menu]")) {
+          setShowLangMenu(false);
+          setShowSubMenu(false);
+        }
+      };
+      document.addEventListener("mousedown", close);
+      return () => document.removeEventListener("mousedown", close);
+    }, [showLangMenu, showSubMenu]);
 
     const showControls = useCallback(() => {
       setControlsVisible(true);
@@ -176,11 +291,8 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
       if (!isHost) return;
       const video = videoRef.current;
       if (!video || !hasSrc) return;
-      if (video.paused) {
-        video.play().catch(() => {});
-      } else {
-        video.pause();
-      }
+      if (video.paused) video.play().catch(() => {});
+      else video.pause();
     };
 
     const handleProgressChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -218,14 +330,117 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
       }
     };
 
-    const toggleFullscreen = () => {
-      const container = containerRef.current;
-      if (!container) return;
-      if (!document.fullscreenElement) {
-        container.requestFullscreen().catch(() => {});
+    const toggleFullscreen = async () => {
+      const video = videoRef.current;
+      const targetEl = fullscreenContainerRef?.current ?? containerRef.current;
+      if (!targetEl) return;
+
+      if (
+        !document.fullscreenElement &&
+        !(document as any).webkitFullscreenElement
+      ) {
+        const wasPlaying = !(video?.paused ?? true);
+        try {
+          await targetEl.requestFullscreen();
+        } catch {
+          /* ignore */
+        }
+        if (wasPlaying) {
+          setTimeout(() => {
+            video?.play().catch(() => {});
+          }, 100);
+        }
       } else {
-        document.exitFullscreen();
+        document.exitFullscreen().catch(() => {});
       }
+    };
+
+    const toggleLandscape = async () => {
+      const video = videoRef.current;
+      const targetEl = fullscreenContainerRef?.current ?? containerRef.current;
+      if (!targetEl || !video) return;
+
+      if (isLandscape) {
+        // Exit
+        try {
+          await document.exitFullscreen();
+        } catch {
+          /* ignore */
+        }
+        setIsLandscape(false);
+        try {
+          (screen.orientation as any).unlock();
+        } catch {
+          /* ignore */
+        }
+      } else {
+        setIsLandscape(true);
+        const wasPlaying = !video.paused;
+        try {
+          if (
+            !document.fullscreenElement &&
+            !(document as any).webkitFullscreenElement
+          ) {
+            await targetEl.requestFullscreen();
+          }
+          // Lock orientation to landscape (Android Chrome, etc.)
+          try {
+            await (screen.orientation as any).lock("landscape");
+          } catch {
+            // Desktop / unsupported — fullscreen alone is sufficient
+          }
+          // Resume playback after layout settles
+          if (wasPlaying) {
+            setTimeout(() => {
+              video.play().catch(() => {});
+            }, 100);
+          }
+        } catch {
+          setIsLandscape(false);
+        }
+      }
+    };
+
+    const switchAudioTrack = (trackId: string) => {
+      const video = videoRef.current;
+      const at = (video as any)?.audioTracks as
+        | {
+            length: number;
+            [index: number]: {
+              id: string;
+              label: string;
+              language: string;
+              enabled: boolean;
+            };
+          }
+        | undefined;
+      if (!at) return;
+      for (let i = 0; i < at.length; i++) {
+        (at[i] as any).enabled = (at[i] as any).id === trackId;
+      }
+      setAudioTracks((prev) =>
+        prev.map((t) => ({ ...t, enabled: t.id === trackId })),
+      );
+      setShowLangMenu(false);
+    };
+
+    const switchSubtitle = (index: number | null) => {
+      const video = videoRef.current;
+      if (!video) return;
+      for (let i = 0; i < video.textTracks.length; i++) {
+        video.textTracks[i].mode = i === index ? "showing" : "hidden";
+      }
+      setActiveSubIndex(index);
+      setTextTracks((prev) =>
+        prev.map((t) => ({
+          ...t,
+          mode:
+            t.index === index
+              ? ("showing" as TextTrackMode)
+              : ("hidden" as TextTrackMode),
+        })),
+      );
+      setShowSubMenu(false);
     };
 
     const handleApplyUrl = () => {
@@ -241,6 +456,11 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
     };
 
     const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
+    const activeAudioLabel = audioTracks.find((t) => t.enabled)?.label;
+    const activeSubLabel =
+      activeSubIndex !== null
+        ? textTracks.find((t) => t.index === activeSubIndex)?.label
+        : null;
 
     return (
       <div
@@ -272,7 +492,11 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
               setCurrentTime(t);
             }
           }}
-          onLoadedMetadata={() => setDuration(videoRef.current?.duration ?? 0)}
+          onLoadedMetadata={() => {
+            setDuration(videoRef.current?.duration ?? 0);
+            // Delay slightly so tracks are fully registered
+            setTimeout(refreshTracks, 200);
+          }}
           onSeeked={() => onSeeked?.(videoRef.current?.currentTime ?? 0)}
           onClick={isHost ? togglePlay : undefined}
           onKeyDown={(e) => isHost && e.key === " " && togglePlay()}
@@ -338,7 +562,7 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
               value={urlInputValue}
               onChange={(e) => setUrlInputValue(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleApplyUrl()}
-              placeholder="Paste video URL (MP4, HLS)..."
+              placeholder="Paste video URL (MP4, MKV, HLS)..."
               className="flex-1 bg-secondary border-border text-foreground placeholder:text-muted-foreground text-sm h-9"
               autoFocus
               data-ocid="video.url.input"
@@ -361,7 +585,7 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
           </div>
         )}
 
-        {/* Big play/pause button (center) -- HOST ONLY */}
+        {/* Big play button (center) -- HOST ONLY */}
         {hasSrc && !isPlaying && isHost && (
           <button
             type="button"
@@ -386,7 +610,7 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
           >
             {/* Progress scrubber -- HOST ONLY */}
             {isHost && (
-              <div className="mb-2 relative">
+              <div className="mb-2">
                 <input
                   type="range"
                   min="0"
@@ -403,8 +627,8 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
             )}
 
             {/* Control row */}
-            <div className="flex items-center justify-between gap-3">
-              {/* Left: play/pause HOST ONLY, time for everyone */}
+            <div className="flex items-center justify-between gap-2">
+              {/* Left: play/pause + time */}
               <div className="flex items-center gap-2">
                 {isHost && (
                   <button
@@ -426,8 +650,8 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
                 </span>
               </div>
 
-              {/* Right */}
-              <div className="flex items-center gap-3">
+              {/* Right: volume + lang + sub + landscape + fullscreen */}
+              <div className="flex items-center gap-2">
                 {/* Volume -- HOST ONLY */}
                 {isHost && (
                   <div className="hidden sm:flex items-center gap-1.5">
@@ -454,6 +678,168 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
                     />
                   </div>
                 )}
+
+                {/* Audio language switcher -- everyone, only shown if >1 audio track */}
+                {audioTracks.length > 1 && (
+                  <div className="relative" data-track-menu>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowLangMenu((v) => !v);
+                        setShowSubMenu(false);
+                      }}
+                      className={cn(
+                        "flex items-center gap-1 px-1.5 py-0.5 rounded text-xs transition-colors",
+                        showLangMenu
+                          ? "text-gold bg-gold/10 border border-gold/30"
+                          : "text-muted-foreground hover:text-foreground",
+                      )}
+                      title="Audio language"
+                      data-ocid="video.lang.button"
+                    >
+                      <Languages className="w-3.5 h-3.5" />
+                      {activeAudioLabel && (
+                        <span className="hidden sm:inline max-w-[60px] truncate">
+                          {activeAudioLabel}
+                        </span>
+                      )}
+                      <ChevronDown className="w-3 h-3" />
+                    </button>
+
+                    {showLangMenu && (
+                      <div className="absolute bottom-full right-0 mb-2 w-44 rounded-lg border border-border bg-card shadow-lg overflow-hidden z-20">
+                        <div className="px-3 py-2 border-b border-border">
+                          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+                            Audio Language
+                          </p>
+                        </div>
+                        {audioTracks.map((track) => (
+                          <button
+                            key={track.id}
+                            type="button"
+                            onClick={() => switchAudioTrack(track.id)}
+                            className={cn(
+                              "w-full text-left px-3 py-2 text-xs flex items-center justify-between hover:bg-secondary transition-colors",
+                              track.enabled ? "text-gold" : "text-foreground",
+                            )}
+                          >
+                            <span>
+                              {track.label}
+                              {track.language && track.language !== track.label
+                                ? ` (${track.language})`
+                                : ""}
+                            </span>
+                            {track.enabled && (
+                              <Check className="w-3 h-3 shrink-0" />
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Subtitle track selector -- everyone, only shown if text tracks exist */}
+                {textTracks.length > 0 && (
+                  <div className="relative" data-track-menu>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowSubMenu((v) => !v);
+                        setShowLangMenu(false);
+                      }}
+                      className={cn(
+                        "flex items-center gap-1 px-1.5 py-0.5 rounded text-xs transition-colors",
+                        showSubMenu || activeSubIndex !== null
+                          ? "text-gold bg-gold/10 border border-gold/30"
+                          : "text-muted-foreground hover:text-foreground",
+                      )}
+                      title="Subtitles"
+                      data-ocid="video.subtitles.button"
+                    >
+                      <Subtitles className="w-3.5 h-3.5" />
+                      {activeSubLabel && (
+                        <span className="hidden sm:inline max-w-[60px] truncate">
+                          {activeSubLabel}
+                        </span>
+                      )}
+                      <ChevronDown className="w-3 h-3" />
+                    </button>
+
+                    {showSubMenu && (
+                      <div className="absolute bottom-full right-0 mb-2 w-44 rounded-lg border border-border bg-card shadow-lg overflow-hidden z-20">
+                        <div className="px-3 py-2 border-b border-border">
+                          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">
+                            Subtitles
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => switchSubtitle(null)}
+                          className={cn(
+                            "w-full text-left px-3 py-2 text-xs flex items-center justify-between hover:bg-secondary transition-colors",
+                            activeSubIndex === null
+                              ? "text-gold"
+                              : "text-foreground",
+                          )}
+                        >
+                          <span>Off</span>
+                          {activeSubIndex === null && (
+                            <Check className="w-3 h-3 shrink-0" />
+                          )}
+                        </button>
+                        {textTracks.map((track) => (
+                          <button
+                            key={track.index}
+                            type="button"
+                            onClick={() => switchSubtitle(track.index)}
+                            className={cn(
+                              "w-full text-left px-3 py-2 text-xs flex items-center justify-between hover:bg-secondary transition-colors",
+                              activeSubIndex === track.index
+                                ? "text-gold"
+                                : "text-foreground",
+                            )}
+                          >
+                            <span>
+                              {track.label}
+                              {track.language && track.language !== track.label
+                                ? ` (${track.language})`
+                                : ""}
+                            </span>
+                            {activeSubIndex === track.index && (
+                              <Check className="w-3 h-3 shrink-0" />
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Landscape mode -- everyone */}
+                <button
+                  type="button"
+                  onClick={toggleLandscape}
+                  className={cn(
+                    "transition-colors",
+                    isLandscape
+                      ? "text-gold hover:text-gold/70"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                  title={isLandscape ? "Exit landscape" : "Landscape mode"}
+                  aria-label={
+                    isLandscape ? "Exit landscape mode" : "Enter landscape mode"
+                  }
+                  data-ocid="video.landscape.button"
+                >
+                  <Smartphone
+                    className="w-4 h-4"
+                    style={{
+                      transform: isLandscape ? "rotate(0deg)" : "rotate(90deg)",
+                      transition: "transform 0.3s ease",
+                    }}
+                  />
+                </button>
 
                 {/* Fullscreen -- everyone */}
                 <button
