@@ -31,12 +31,6 @@ export interface ChatMessage {
 export interface UserProfile {
     name: string;
 }
-export interface LibraryItem {
-    slot: bigint;
-    videoUrl: string;
-    videoName: string;
-    uploadedAt: Time;
-}
 export enum UserRole {
     admin = "admin",
     user = "user",
@@ -80,7 +74,4 @@ export interface backendInterface {
         position: number;
         roomCode: string;
     }): Promise<void>;
-    getLibrary(): Promise<Array<LibraryItem>>;
-    setLibrarySlot(slot: bigint, videoUrl: string, videoName: string): Promise<void>;
-    deleteLibrarySlot(slot: bigint): Promise<void>;
 }

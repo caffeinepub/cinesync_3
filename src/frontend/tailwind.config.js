@@ -52,7 +52,8 @@ export default {
           DEFAULT: "oklch(var(--card))",
           foreground: "oklch(var(--card-foreground))",
         },
-        gold: "oklch(var(--gold))",
+        gold: "oklch(var(--gold) / <alpha-value>)",
+        violet: "oklch(var(--violet) / <alpha-value>)",
         "status-green": "oklch(var(--status-green))",
         "status-yellow": "oklch(var(--status-yellow))",
         chart: {
@@ -82,6 +83,7 @@ export default {
         xs: "0 1px 2px 0 rgba(0,0,0,0.05)",
         gold: "0 0 20px oklch(0.77 0.10 83 / 0.2)",
         panel: "0 4px 24px oklch(0 0 0 / 0.6)",
+        violet: "0 0 24px oklch(0.58 0.22 285 / 0.25)",
       },
       keyframes: {
         "accordion-down": {

@@ -483,16 +483,40 @@ export class StorageClient {
 
   private async getCertificate(hash: string): Promise<Uint8Array> {
     const args = IDL.encode([IDL.Text], [hash]);
-    const result = await this.agent.call(this.backendCanisterId, {
-      methodName: "_caffeineStorageCreateCertificate",
-      arg: args,
-    });
-    const respone = result.response.body;
-    if (isV3ResponseBody(respone)) {
-      console.log("Certificate:", respone.certificate);
-      return respone.certificate;
+    const MAX_CERT_ATTEMPTS = 5;
+    const CERT_POLL_DELAY_MS = 1500;
+    for (let attempt = 0; attempt < MAX_CERT_ATTEMPTS; attempt++) {
+      try {
+        const result = await this.agent.call(this.backendCanisterId, {
+          methodName: "_caffeineStorageCreateCertificate",
+          arg: args,
+        });
+        const responseBody = result.response.body;
+        if (isV3ResponseBody(responseBody)) {
+          return responseBody.certificate;
+        }
+        // v2 response -- wait and retry
+        console.warn(
+          `Certificate attempt ${attempt + 1}: v2 response, retrying...`,
+        );
+      } catch (err: any) {
+        const msg = (err?.message ?? String(err)).toLowerCase();
+        if (
+          msg.includes("rejected") ||
+          msg.includes("403") ||
+          msg.includes("unauthorized")
+        ) {
+          throw err;
+        }
+        console.warn(
+          `Certificate attempt ${attempt + 1} failed: ${err?.message}. Retrying...`,
+        );
+      }
+      if (attempt < MAX_CERT_ATTEMPTS - 1) {
+        await new Promise((resolve) => setTimeout(resolve, CERT_POLL_DELAY_MS));
+      }
     }
-    throw new Error("Expected v3 response body");
+    throw new Error("Failed to obtain upload certificate. Please try again.");
   }
 
   public async putFile(

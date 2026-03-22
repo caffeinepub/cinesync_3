@@ -1,5 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Check, Copy, Film, LogOut, Users, Wifi } from "lucide-react";
+import { motion } from "motion/react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -30,7 +31,12 @@ export default function StickyHeader({
   };
 
   return (
-    <header className="sticky top-0 z-40 border-b border-border bg-background/95 backdrop-blur-md">
+    <motion.header
+      initial={{ y: -8, opacity: 0 }}
+      animate={{ y: 0, opacity: 1 }}
+      transition={{ duration: 0.3, ease: "easeOut" }}
+      className="sticky top-0 z-40 border-b border-border bg-background/95 backdrop-blur-md"
+    >
       <div className="px-4 sm:px-6 h-14 flex items-center gap-3">
         {/* Logo */}
         <div className="flex items-center gap-1.5 mr-2">
@@ -109,6 +115,6 @@ export default function StickyHeader({
           Leave
         </Button>
       </div>
-    </header>
+    </motion.header>
   );
 }

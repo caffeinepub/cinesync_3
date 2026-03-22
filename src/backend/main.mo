@@ -47,42 +47,14 @@ actor {
     userProfiles.add(caller, profile);
   };
 
-  // Video Library Management (up to 2 slots)
+  // Legacy stable variable retained for upgrade compatibility (library feature removed)
   public type LibraryItem = {
     slot : Nat;
     videoUrl : Text;
     videoName : Text;
     uploadedAt : Time.Time;
   };
-
   let librarySlots = Map.empty<Nat, LibraryItem>();
-
-  public query func getLibrary() : async [LibraryItem] {
-    librarySlots.values().toArray();
-  };
-
-  public shared ({ caller }) func setLibrarySlot(slot : Nat, videoUrl : Text, videoName : Text) : async () {
-    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
-      Runtime.trap("Unauthorized: Only authenticated users can manage the library");
-    };
-    if (slot > 1) {
-      Runtime.trap("Invalid slot: only slots 0 and 1 are supported");
-    };
-    let item : LibraryItem = {
-      slot;
-      videoUrl;
-      videoName;
-      uploadedAt = Time.now();
-    };
-    librarySlots.add(slot, item);
-  };
-
-  public shared ({ caller }) func deleteLibrarySlot(slot : Nat) : async () {
-    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
-      Runtime.trap("Unauthorized: Only authenticated users can manage the library");
-    };
-    librarySlots.remove(slot);
-  };
 
   // Room Types
   type ChatMessage = {

@@ -1,4 +1,5 @@
 import { Toaster } from "@/components/ui/sonner";
+import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState } from "react";
 import LandingPage from "./pages/LandingPage";
 import RoomPage from "./pages/RoomPage";
@@ -28,16 +29,34 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      {page.type === "landing" ? (
-        <LandingPage onEnterRoom={handleEnterRoom} />
-      ) : (
-        <RoomPage
-          roomCode={page.roomCode}
-          nickname={page.nickname}
-          isHostInitial={page.isHost}
-          onLeaveRoom={handleLeaveRoom}
-        />
-      )}
+      <AnimatePresence mode="wait">
+        {page.type === "landing" ? (
+          <motion.div
+            key="landing"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.25 }}
+          >
+            <LandingPage onEnterRoom={handleEnterRoom} />
+          </motion.div>
+        ) : (
+          <motion.div
+            key="room"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.25 }}
+          >
+            <RoomPage
+              roomCode={page.roomCode}
+              nickname={page.nickname}
+              isHostInitial={page.isHost}
+              onLeaveRoom={handleLeaveRoom}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
       <Toaster
         theme="dark"
         toastOptions={{

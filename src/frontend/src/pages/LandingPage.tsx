@@ -2,24 +2,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useQueryClient } from "@tanstack/react-query";
-import {
-  Copy,
-  Film,
-  Library,
-  Loader2,
-  LogIn,
-  Play,
-  Trash2,
-  Upload,
-  Users,
-  Zap,
-} from "lucide-react";
+import { Copy, Film, Loader2, LogIn, Play, Users, Zap } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useActor } from "../hooks/useActor";
 import { useInternetIdentity } from "../hooks/useInternetIdentity";
-import { useStorageClient } from "../hooks/useStorageClient";
 import { getSecretParameter } from "../utils/urlParams";
 
 interface LandingPageProps {
@@ -47,371 +35,16 @@ async function withRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
   throw new Error("Max retries exceeded");
 }
 
-const LIBRARY_CODE = "161189";
-
-function LibraryPanel({ onClose }: { onClose: () => void }) {
-  const { actor } = useActor();
-  const { identity, login, loginStatus } = useInternetIdentity();
-  const storageClient = useStorageClient();
-  const isAuthenticated = !!identity;
-  const isLoggingIn = loginStatus === "logging-in";
-
-  const [library, setLibrary] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [isStorageLoading, setIsStorageLoading] = useState(true);
-  const [uploadingSlot, setUploadingSlot] = useState<number | null>(null);
-  const [uploadProgress, setUploadProgress] = useState<number>(0);
-  const [deletingSlot, setDeletingSlot] = useState<number | null>(null);
-  const fileInputRefs = [
-    useRef<HTMLInputElement>(null),
-    useRef<HTMLInputElement>(null),
-  ];
-
-  useEffect(() => {
-    if (storageClient) {
-      setIsStorageLoading(false);
-    }
-  }, [storageClient]);
-
-  const fetchLibrary = async () => {
-    if (!actor) return;
-    // Retry up to 3 times with backoff for transient canister errors
-    let lastErr: unknown;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        const items = await (actor as any).getLibrary();
-        setLibrary(items);
-        setLoading(false);
-        return;
-      } catch (e) {
-        lastErr = e;
-        if (attempt < 2)
-          await new Promise((r) => setTimeout(r, 800 * (attempt + 1)));
-      }
-    }
-    console.error("[fetchLibrary] failed after 3 attempts:", lastErr);
-    toast.error("Failed to load library — please try again");
-    setLoading(false);
-  };
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: fetchLibrary is stable within render
-  useEffect(() => {
-    if (actor && isAuthenticated) {
-      fetchLibrary();
-    } else {
-      setLoading(false);
-    }
-  }, [actor, isAuthenticated]);
-
-  const getSlot = (slotIndex: number) =>
-    library.find((item) => Number(item.slot) === slotIndex) ?? null;
-
-  const handleUpload = async (slotIndex: number, file: File) => {
-    if (!actor) {
-      toast.error("Backend not ready — please wait a moment and try again");
-      return;
-    }
-    if (!storageClient) {
-      toast.error("Storage initializing — please try again in a moment");
-      return;
-    }
-    if (!isAuthenticated) {
-      toast.error("Please sign in to upload to the library");
-      return;
-    }
-
-    // Ensure the user is registered in the access control system.
-    // _initializeAccessControlWithSecret is idempotent — already-registered
-    // users are skipped. This fixes "User is not registered" traps when the
-    // background init in useActor.ts hasn't completed yet.
-    try {
-      const adminToken = getSecretParameter("caffeineAdminToken") || "";
-      await (actor as any)._initializeAccessControlWithSecret(adminToken);
-    } catch {
-      // Either already registered (safe to ignore) or canister issue
-      // — let setLibrarySlot surface the real error below if needed.
-    }
-
-    setUploadingSlot(slotIndex);
-    setUploadProgress(0);
-    try {
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      const { hash } = await storageClient.putFile(bytes, (pct) => {
-        setUploadProgress(pct);
-      });
-      const url = await storageClient.getDirectURL(hash);
-      await (actor as any).setLibrarySlot(BigInt(slotIndex), url, file.name);
-      toast.success(`Slot ${slotIndex + 1} saved!`);
-      await fetchLibrary();
-    } catch (err) {
-      let message = "Upload failed";
-      if (err instanceof Error) {
-        const trapMatch = err.message.match(
-          /trapped explicitly: (.+?)(?:\n|$)/,
-        );
-        message = trapMatch ? trapMatch[1] : err.message;
-      }
-      toast.error(message);
-    } finally {
-      setUploadingSlot(null);
-      setUploadProgress(0);
-    }
-  };
-
-  const handleDelete = async (slotIndex: number) => {
-    if (!actor) return;
-    setDeletingSlot(slotIndex);
-    try {
-      await (actor as any).deleteLibrarySlot(BigInt(slotIndex));
-      toast.success(`Slot ${slotIndex + 1} deleted`);
-      await fetchLibrary();
-    } catch {
-      toast.error("Failed to delete slot");
-    } finally {
-      setDeletingSlot(null);
-    }
-  };
-
-  return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      exit={{ opacity: 0 }}
-      className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-md"
-      onClick={(e) => e.target === e.currentTarget && onClose()}
-      data-ocid="library.modal"
-    >
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95, y: 16 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.95, y: 16 }}
-        transition={{ type: "spring", damping: 25, stiffness: 350 }}
-        className="w-full max-w-md mx-4 rounded-xl border border-gold/30 bg-card shadow-panel overflow-hidden"
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
-          <div className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-gold/10 border border-gold/25 flex items-center justify-center">
-              <Library className="w-4 h-4 text-gold" />
-            </div>
-            <div>
-              <h2 className="text-sm font-semibold text-foreground">
-                Video Library
-              </h2>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                2 permanent slots — accessible from any room
-              </p>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-            data-ocid="library.close.button"
-          >
-            <span className="text-lg leading-none">&times;</span>
-          </button>
-        </div>
-
-        <div className="p-5 space-y-4">
-          {!isAuthenticated ? (
-            <div className="rounded-lg bg-gold/5 border border-gold/20 p-4 text-center space-y-3">
-              <p className="text-sm text-muted-foreground">
-                Sign in to manage your video library
-              </p>
-              <Button
-                onClick={login}
-                disabled={isLoggingIn}
-                className="bg-gold text-background hover:bg-gold/90 font-semibold"
-                data-ocid="library.login.button"
-              >
-                {isLoggingIn ? (
-                  <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                ) : (
-                  <LogIn className="w-4 h-4 mr-2" />
-                )}
-                {isLoggingIn ? "Signing in..." : "Sign In"}
-              </Button>
-            </div>
-          ) : loading ? (
-            <div
-              className="flex items-center justify-center py-8"
-              data-ocid="library.loading_state"
-            >
-              <Loader2 className="w-5 h-5 animate-spin text-gold" />
-            </div>
-          ) : (
-            <div className="space-y-3">
-              {[0, 1].map((slotIndex) => {
-                const item = getSlot(slotIndex);
-                const isUploading = uploadingSlot === slotIndex;
-                const isDeleting = deletingSlot === slotIndex;
-
-                return (
-                  <div
-                    key={slotIndex}
-                    className="rounded-xl border border-border bg-secondary/40 p-4"
-                    data-ocid={`library.item.${slotIndex + 1}`}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div className="w-9 h-9 rounded-lg bg-card border border-border flex items-center justify-center flex-shrink-0">
-                          <Film className="w-4 h-4 text-gold" />
-                        </div>
-                        <div className="min-w-0">
-                          <p className="text-xs font-medium text-gold uppercase tracking-wider mb-0.5">
-                            Slot {slotIndex + 1}
-                          </p>
-                          {item ? (
-                            <p className="text-sm text-foreground font-medium truncate max-w-[180px]">
-                              {item.videoName}
-                            </p>
-                          ) : (
-                            <p className="text-sm text-muted-foreground italic">
-                              Empty
-                            </p>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-2 flex-shrink-0">
-                        {item ? (
-                          <>
-                            <label
-                              htmlFor={`lib-replace-${slotIndex}`}
-                              className={`p-1.5 rounded-lg transition-colors ${
-                                isStorageLoading || isUploading || !actor
-                                  ? "opacity-50 cursor-not-allowed text-muted-foreground"
-                                  : "cursor-pointer text-muted-foreground hover:text-gold hover:bg-gold/10"
-                              }`}
-                              title={
-                                !actor
-                                  ? "Backend connecting..."
-                                  : isStorageLoading
-                                    ? "Storage initializing..."
-                                    : "Replace video"
-                              }
-                              data-ocid={`library.upload_button.${slotIndex + 1}`}
-                            >
-                              {isStorageLoading ? (
-                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              ) : (
-                                <Upload className="w-4 h-4" />
-                              )}
-                              <input
-                                id={`lib-replace-${slotIndex}`}
-                                ref={fileInputRefs[slotIndex]}
-                                type="file"
-                                accept="video/*,.mkv,video/x-matroska"
-                                className="hidden"
-                                disabled={
-                                  isUploading || isStorageLoading || !actor
-                                }
-                                onChange={(e) => {
-                                  const file = e.target.files?.[0];
-                                  if (file) handleUpload(slotIndex, file);
-                                  e.target.value = "";
-                                }}
-                              />
-                            </label>
-                            <button
-                              type="button"
-                              onClick={() => handleDelete(slotIndex)}
-                              disabled={isDeleting}
-                              className="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
-                              title="Delete slot"
-                              data-ocid={`library.delete_button.${slotIndex + 1}`}
-                            >
-                              {isDeleting ? (
-                                <Loader2 className="w-4 h-4 animate-spin" />
-                              ) : (
-                                <Trash2 className="w-4 h-4" />
-                              )}
-                            </button>
-                          </>
-                        ) : (
-                          <label
-                            htmlFor={`lib-upload-${slotIndex}`}
-                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
-                              isStorageLoading || isUploading || !actor
-                                ? "opacity-50 cursor-not-allowed bg-gold/5 border-gold/20 text-gold/60"
-                                : "cursor-pointer bg-gold/10 border-gold/30 text-gold hover:bg-gold/20"
-                            }`}
-                            data-ocid={`library.upload_button.${slotIndex + 1}`}
-                          >
-                            {isStorageLoading || !actor ? (
-                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            ) : (
-                              <Upload className="w-3.5 h-3.5" />
-                            )}
-                            {!actor
-                              ? "Connecting..."
-                              : isStorageLoading
-                                ? "Initializing..."
-                                : "Upload"}
-                            <input
-                              id={`lib-upload-${slotIndex}`}
-                              ref={fileInputRefs[slotIndex]}
-                              type="file"
-                              accept="video/*,.mkv,video/x-matroska"
-                              className="hidden"
-                              disabled={
-                                isUploading || isStorageLoading || !actor
-                              }
-                              onChange={(e) => {
-                                const file = e.target.files?.[0];
-                                if (file) handleUpload(slotIndex, file);
-                                e.target.value = "";
-                              }}
-                            />
-                          </label>
-                        )}
-                      </div>
-                    </div>
-
-                    {isUploading && (
-                      <div
-                        className="mt-3 space-y-1.5"
-                        data-ocid="library.loading_state"
-                      >
-                        <div className="flex justify-between text-xs text-muted-foreground">
-                          <span>Uploading to network...</span>
-                          <span>
-                            {uploadProgress === 0
-                              ? "Preparing upload..."
-                              : `Uploading to network... ${uploadProgress}%`}
-                          </span>
-                        </div>
-                        <div className="w-full bg-card rounded-full h-1.5">
-                          <div
-                            className="bg-gold h-1.5 rounded-full transition-all"
-                            style={{ width: `${uploadProgress}%` }}
-                          />
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </motion.div>
-    </motion.div>
-  );
-}
-
 export default function LandingPage({ onEnterRoom }: LandingPageProps) {
   const { identity, login, clear, loginStatus } = useInternetIdentity();
   const { actor, isFetching: actorFetching } = useActor();
-  // actorIsError: treat as error if not fetching and no actor after initial load
   const [actorLoadFailed, setActorLoadFailed] = useState(false);
   const actorIsError = actorLoadFailed;
+  const qc = useQueryClient();
   const refetchActor = () => {
     setActorLoadFailed(false);
     qc.invalidateQueries({ queryKey: ["actor"] });
   };
-  const qc = useQueryClient();
 
   const [createCode, setCreateCode] = useState("");
   const [createNickname, setCreateNickname] = useState("");
@@ -420,10 +53,6 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
   const [joinCode, setJoinCode] = useState("");
   const [joinNickname, setJoinNickname] = useState("");
   const [joinLoading, setJoinLoading] = useState(false);
-
-  const [showLibraryPrompt, setShowLibraryPrompt] = useState(false);
-  const [libraryCode, setLibraryCode] = useState("");
-  const [showLibrary, setShowLibrary] = useState(false);
 
   const isAuthenticated = !!identity;
   const isLoggingIn = loginStatus === "logging-in";
@@ -510,17 +139,6 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
     }
   };
 
-  const handleLibraryCodeSubmit = () => {
-    if (libraryCode === LIBRARY_CODE) {
-      setShowLibraryPrompt(false);
-      setLibraryCode("");
-      setShowLibrary(true);
-    } else {
-      toast.error("Incorrect access code");
-      setLibraryCode("");
-    }
-  };
-
   const hasBackendError = actorIsError && !actorFetching;
   const isConnecting = actorFetching;
 
@@ -533,82 +151,67 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
   const createButtonDisabled =
     !isAuthenticated || createLoading || isConnecting || hasBackendError;
 
+  // Suppress unused import warning
+  void getSecretParameter;
+
   return (
     <div className="min-h-screen bg-background flex flex-col">
-      {/* Library Panel */}
-      <AnimatePresence>
-        {showLibrary && <LibraryPanel onClose={() => setShowLibrary(false)} />}
-      </AnimatePresence>
-
-      {/* Library Code Prompt */}
-      <AnimatePresence>
-        {showLibraryPrompt && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-md"
-            onClick={(e) =>
-              e.target === e.currentTarget && setShowLibraryPrompt(false)
-            }
-            data-ocid="library.dialog"
-          >
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 12 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 12 }}
-              transition={{ type: "spring", damping: 25, stiffness: 350 }}
-              className="w-80 mx-4 rounded-xl border border-gold/30 bg-card shadow-panel p-6 space-y-4"
-            >
-              <div className="flex items-center gap-2">
-                <Library className="w-4 h-4 text-gold" />
-                <h3 className="text-sm font-semibold text-foreground">
-                  Library Access
-                </h3>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Enter access code to manage your video library
-              </p>
-              <Input
-                placeholder="Enter access code"
-                type="password"
-                value={libraryCode}
-                onChange={(e) => setLibraryCode(e.target.value)}
-                onKeyDown={(e) =>
-                  e.key === "Enter" && handleLibraryCodeSubmit()
-                }
-                autoFocus
-                className="bg-secondary border-border text-foreground placeholder:text-muted-foreground h-10"
-                data-ocid="library.code.input"
-              />
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setShowLibraryPrompt(false);
-                    setLibraryCode("");
-                  }}
-                  className="flex-1 border-border bg-secondary text-foreground hover:bg-card"
-                  data-ocid="library.cancel.button"
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={handleLibraryCodeSubmit}
-                  disabled={!libraryCode}
-                  className="flex-1 bg-gold text-background hover:bg-gold/90 font-semibold"
-                  data-ocid="library.confirm.button"
-                >
-                  Unlock
-                </Button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* Ambient background glows */}
+      <div
+        className="fixed inset-0 pointer-events-none overflow-hidden"
+        aria-hidden="true"
+      >
+        {/* Top-left violet glow */}
+        <div
+          style={{
+            position: "absolute",
+            top: "-10%",
+            left: "-10%",
+            width: "55%",
+            height: "55%",
+            borderRadius: "50%",
+            background:
+              "radial-gradient(ellipse, oklch(0.58 0.22 285 / 0.12) 0%, transparent 70%)",
+            filter: "blur(40px)",
+          }}
+        />
+        {/* Top-right teal glow */}
+        <div
+          style={{
+            position: "absolute",
+            top: "-5%",
+            right: "-10%",
+            width: "45%",
+            height: "50%",
+            borderRadius: "50%",
+            background:
+              "radial-gradient(ellipse, oklch(0.72 0.18 195 / 0.08) 0%, transparent 70%)",
+            filter: "blur(48px)",
+          }}
+        />
+        {/* Center deep indigo pool */}
+        <div
+          style={{
+            position: "absolute",
+            top: "30%",
+            left: "30%",
+            width: "40%",
+            height: "40%",
+            borderRadius: "50%",
+            background:
+              "radial-gradient(ellipse, oklch(0.45 0.18 275 / 0.07) 0%, transparent 70%)",
+            filter: "blur(60px)",
+          }}
+        />
+      </div>
 
       {/* Header */}
-      <header className="sticky top-0 z-50 border-b border-border bg-background/90 backdrop-blur-md">
+      <motion.header
+        initial={{ y: -8, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ duration: 0.35, ease: "easeOut" }}
+        className="sticky top-0 z-50 border-b border-border bg-background/90 backdrop-blur-md"
+      >
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
           {/* Logo */}
           <div className="flex items-center gap-2">
@@ -664,7 +267,7 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
             </Button>
           </div>
         </div>
-      </header>
+      </motion.header>
 
       {/* Hero */}
       <section className="relative overflow-hidden">
@@ -697,7 +300,7 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
           50% { filter: drop-shadow(0 0 24px rgba(200, 0, 255, 1)) drop-shadow(0 0 48px rgba(0, 220, 255, 0.9)) drop-shadow(0 0 64px rgba(0, 255, 200, 0.6)); }
         }
         .aurora-text {
-          background: linear-gradient(90deg, #7b00ff 0%, #00e5ff 25%, #00ff9d 50%, #00cfff 75%, #8b00ff 100%);
+          background: linear-gradient(90deg, #4400ff 0%, #7b00ff 15%, #00e5ff 35%, #00ff9d 55%, #00cfff 75%, #8b00ff 100%);
           background-size: 300% 100%;
           -webkit-background-clip: text;
           -webkit-text-fill-color: transparent;
@@ -751,10 +354,18 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
                 ))}
               </span>
             </div>
-            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-gold/30 bg-gold/5 text-gold text-xs font-medium tracking-widest uppercase mb-6">
+
+            {/* Badge with pulse entrance */}
+            <motion.div
+              initial={{ opacity: 0, scale: 0.85 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.4, delay: 0.65, ease: "backOut" }}
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-gold/30 bg-gold/5 text-gold text-xs font-medium tracking-widest uppercase mb-6"
+            >
               <span className="w-1.5 h-1.5 rounded-full bg-status-green animate-pulse-slow" />
               Watch Together in Perfect Sync
-            </div>
+            </motion.div>
+
             <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold text-foreground mb-4 tracking-tight">
               Cinema-Grade
               <br />
@@ -779,7 +390,11 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
             initial={{ opacity: 0, y: 24 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5, delay: 0.1 }}
-            className="rounded-xl border border-gold/25 bg-card p-6 flex flex-col gap-5 shadow-panel"
+            whileHover={{
+              boxShadow:
+                "0 0 0 1px oklch(0.77 0.1 83 / 0.4), 0 0 24px oklch(0.58 0.22 285 / 0.15)",
+            }}
+            className="rounded-xl border border-gold/25 bg-card p-6 flex flex-col gap-5 shadow-panel transition-shadow"
           >
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-lg bg-gold/10 border border-gold/25 flex items-center justify-center">
@@ -874,7 +489,11 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
             initial={{ opacity: 0, y: 24 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.5, delay: 0.2 }}
-            className="rounded-xl border border-border bg-card p-6 flex flex-col gap-5 shadow-panel"
+            whileHover={{
+              boxShadow:
+                "0 0 0 1px oklch(0.58 0.22 285 / 0.3), 0 0 20px oklch(0.58 0.22 285 / 0.1)",
+            }}
+            className="rounded-xl border border-border bg-card p-6 flex flex-col gap-5 shadow-panel transition-shadow"
           >
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-lg bg-secondary flex items-center justify-center">
@@ -962,21 +581,28 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
               icon: Zap,
               title: "Real-Time Sync",
               desc: "Play, pause, and seek in perfect sync across all viewers.",
+              delay: 0.3,
             },
             {
               icon: Film,
               title: "Any Video Source",
               desc: "Paste any MP4 or HLS URL and watch instantly together.",
+              delay: 0.4,
             },
             {
               icon: Users,
               title: "Built-In Chat",
               desc: "React in real-time with an integrated chat panel.",
+              delay: 0.5,
             },
-          ].map(({ icon: Icon, title, desc }) => (
-            <div
+          ].map(({ icon: Icon, title, desc, delay }) => (
+            <motion.div
               key={title}
-              className="rounded-xl border border-border bg-card/50 p-5 flex flex-col gap-2"
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.45, delay, ease: "easeOut" }}
+              whileHover={{ y: -3, transition: { duration: 0.2 } }}
+              className="rounded-xl border border-border bg-card/50 p-5 flex flex-col gap-2 cursor-default"
             >
               <div className="w-9 h-9 rounded-lg bg-gold/10 border border-gold/20 flex items-center justify-center mb-1">
                 <Icon className="w-4 h-4 text-gold" />
@@ -985,7 +611,7 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
               <p className="text-xs text-muted-foreground leading-relaxed">
                 {desc}
               </p>
-            </div>
+            </motion.div>
           ))}
         </div>
       </section>
@@ -1016,16 +642,6 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
               <Copy className="w-3 h-3" />
               <span>Share your room code to invite friends</span>
             </div>
-            {/* Library button */}
-            <button
-              type="button"
-              onClick={() => setShowLibraryPrompt(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gold/30 bg-gold/5 text-gold text-xs font-medium hover:bg-gold/15 hover:border-gold/60 transition-all"
-              data-ocid="library.open_modal_button"
-            >
-              <Library className="w-3.5 h-3.5" />
-              Library
-            </button>
           </div>
         </div>
       </footer>

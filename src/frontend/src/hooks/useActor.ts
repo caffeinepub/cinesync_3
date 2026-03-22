@@ -15,48 +15,34 @@ export function useActor() {
       const isAuthenticated = !!identity;
 
       if (!isAuthenticated) {
-        // Return anonymous actor if not authenticated
         return await createActorWithConfig();
       }
 
-      const actorOptions = {
-        agentOptions: {
-          identity,
-        },
-      };
-
+      const actorOptions = { agentOptions: { identity } };
       const actor = await createActorWithConfig(actorOptions);
+      // Fire-and-forget -- do NOT await, so actor is returned immediately
       const adminToken = getSecretParameter("caffeineAdminToken") || "";
-      // Fire in background — never block actor creation on this call.
-      // If it fails the user will be registered on the next attempt.
       actor
         ._initializeAccessControlWithSecret(adminToken)
-        .catch((e: unknown) => {
+        .catch((err: unknown) => {
           console.warn(
-            "[useActor] _initializeAccessControlWithSecret failed (will retry on next action):",
-            e,
+            "[useActor] _initializeAccessControlWithSecret error (background):",
+            err,
           );
         });
       return actor;
     },
-    // Only refetch when identity changes
     staleTime: Number.POSITIVE_INFINITY,
-    // This will cause the actor to be recreated when the identity changes
     enabled: true,
   });
 
-  // When the actor changes, invalidate dependent queries
   useEffect(() => {
     if (actorQuery.data) {
       queryClient.invalidateQueries({
-        predicate: (query) => {
-          return !query.queryKey.includes(ACTOR_QUERY_KEY);
-        },
+        predicate: (query) => !query.queryKey.includes(ACTOR_QUERY_KEY),
       });
       queryClient.refetchQueries({
-        predicate: (query) => {
-          return !query.queryKey.includes(ACTOR_QUERY_KEY);
-        },
+        predicate: (query) => !query.queryKey.includes(ACTOR_QUERY_KEY),
       });
     }
   }, [actorQuery.data, queryClient]);

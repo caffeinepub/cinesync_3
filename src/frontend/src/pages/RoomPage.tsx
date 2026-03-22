@@ -1,3 +1,4 @@
+import { motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import AdminDashboard from "../components/AdminDashboard";
@@ -54,6 +55,10 @@ export default function RoomPage({
   const syncIgnoreUntil = useRef(0);
   const prevSyncVersionRef = useRef<bigint>(BigInt(0));
 
+  // Predictive sync refs — track when we last received a sync and what position it was at
+  const syncReceivedAtRef = useRef<number>(0);
+  const syncReceivedPositionRef = useRef<number>(0);
+
   useEffect(() => {
     if (!roomState || effectiveIsHost) return;
     const now = Date.now();
@@ -72,6 +77,9 @@ export default function RoomPage({
     ) {
       prevVideoSource.current = roomState.videoSource;
       setVideoSrc(roomState.videoSource);
+      // Record the sync position when video first loads
+      syncReceivedAtRef.current = Date.now();
+      syncReceivedPositionRef.current = roomState.position;
       video.loadAndSync(
         roomState.videoSource,
         roomState.position,
@@ -81,6 +89,8 @@ export default function RoomPage({
     }
 
     if (isForceSync) {
+      syncReceivedAtRef.current = Date.now();
+      syncReceivedPositionRef.current = roomState.position;
       video.seek(roomState.position);
       if (roomState.isPlaying) {
         video.play();
@@ -92,6 +102,10 @@ export default function RoomPage({
       return;
     }
 
+    // Update predictive sync tracking on every poll
+    syncReceivedAtRef.current = Date.now();
+    syncReceivedPositionRef.current = roomState.position;
+
     const localPaused = video.getIsPaused();
     if (roomState.isPlaying && localPaused) {
       video.play();
@@ -99,10 +113,14 @@ export default function RoomPage({
       video.pause();
     }
 
+    // Use predictive position: account for time elapsed since server's position snapshot
+    const elapsed = (Date.now() - syncReceivedAtRef.current) / 1000;
+    const expectedPosition =
+      syncReceivedPositionRef.current + (roomState.isPlaying ? elapsed : 0);
     const localTime = video.getCurrentTime();
-    const drift = Math.abs(roomState.position - localTime);
-    if (drift > 3) {
-      video.seek(roomState.position);
+    const drift = Math.abs(localTime - expectedPosition);
+    if (drift > 2) {
+      video.seek(expectedPosition);
       setIsSynced(false);
       setTimeout(() => setIsSynced(true), 1000);
     }
@@ -122,13 +140,14 @@ export default function RoomPage({
 
   useEffect(() => {
     if (!effectiveIsHost) return;
+    // Reduced to 6s since participants now predict position locally
     const interval = setInterval(() => {
       const video = videoRef.current;
       if (!video) return;
       if (!video.getIsPaused()) {
         pushPlayback(true, video.getCurrentTime());
       }
-    }, 4000);
+    }, 6000);
     return () => clearInterval(interval);
   }, [effectiveIsHost, pushPlayback]);
 
@@ -211,10 +230,15 @@ export default function RoomPage({
         className="min-h-screen bg-background flex items-center justify-center"
         data-ocid="room.loading_state"
       >
-        <div className="flex flex-col items-center gap-3">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.3 }}
+          className="flex flex-col items-center gap-3"
+        >
           <div className="w-8 h-8 rounded-full border-2 border-gold/30 border-t-gold animate-spin" />
           <p className="text-sm text-muted-foreground">Connecting to room...</p>
-        </div>
+        </motion.div>
       </div>
     );
   }
@@ -225,7 +249,12 @@ export default function RoomPage({
         className="min-h-screen bg-background flex items-center justify-center"
         data-ocid="room.error_state"
       >
-        <div className="text-center max-w-sm mx-auto px-4">
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.3 }}
+          className="text-center max-w-sm mx-auto px-4"
+        >
           <p className="text-foreground font-semibold mb-2">Room not found</p>
           <p className="text-sm text-muted-foreground mb-4">{error}</p>
           <button
@@ -236,14 +265,17 @@ export default function RoomPage({
           >
             Back to Home
           </button>
-        </div>
+        </motion.div>
       </div>
     );
   }
 
   return (
-    <div
+    <motion.div
       ref={rootRef}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.4 }}
       className="h-screen overflow-hidden bg-background flex flex-col"
     >
       <StickyHeader
@@ -346,6 +378,6 @@ export default function RoomPage({
           />
         </div>
       </div>
-    </div>
+    </motion.div>
   );
 }

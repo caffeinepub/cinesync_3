@@ -1,18 +1,9 @@
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Check,
-  Film,
-  Library,
-  Link2,
-  Loader2,
-  RefreshCw,
-  Upload,
-  X,
-} from "lucide-react";
+import { Check, Link2, Loader2, RefreshCw, Upload, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { useActor } from "../hooks/useActor";
 import { useStorageClient } from "../hooks/useStorageClient";
@@ -38,53 +29,17 @@ export default function AdminDashboard({
   const [uploading, setUploading] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
-  // Library tab state
-  const [library, setLibrary] = useState<any[]>([]);
-  const [libraryLoading, setLibraryLoading] = useState(false);
-  const [loadingSlot, setLoadingSlot] = useState<number | null>(null);
-
-  const fetchLibrary = async () => {
-    if (!actor) return;
-    setLibraryLoading(true);
-    try {
-      const items = await (actor as any).getLibrary();
-      setLibrary(items);
-    } catch {
-      toast.error("Failed to load library");
-    } finally {
-      setLibraryLoading(false);
-    }
-  };
-
-  const handleLoadFromLibrary = async (item: any) => {
-    if (!actor) return;
-    const slotNum = Number(item.slot);
-    setLoadingSlot(slotNum);
-    try {
-      await actor.setVideoSource({ roomCode, videoSource: item.videoUrl });
-      onVideoSourceChange(item.videoUrl);
-      toast.success(`Loaded "${item.videoName}" from library!`);
-      onClose();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to load video");
-    } finally {
-      setLoadingSlot(null);
-    }
-  };
-
   const handleApplyUrl = async () => {
-    const url = urlValue.trim();
-    if (!url || !actor) return;
+    if (!urlValue.trim()) return;
     setApplying(true);
     try {
-      await actor.setVideoSource({ roomCode, videoSource: url });
-      onVideoSourceChange(url);
-      toast.success("Video source updated for all viewers!");
-      onClose();
+      await (actor as any).setVideoSource(roomCode, urlValue.trim());
+      onVideoSourceChange(urlValue.trim());
+      toast.success("Video URL applied to all viewers!");
+      setUrlValue("");
     } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "Failed to set video source",
-      );
+      console.error("[handleApplyUrl] error:", err);
+      toast.error("Failed to apply URL — please try again");
     } finally {
       setApplying(false);
     }
@@ -92,32 +47,36 @@ export default function AdminDashboard({
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !actor || !storageClient) return;
+    if (!file || !storageClient) return;
     setUploading(true);
     setUploadProgress(0);
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
       const { hash } = await storageClient.putFile(bytes, (pct) => {
-        setUploadProgress(pct);
+        setUploadProgress(Math.min(100, Math.round(pct)));
       });
-      const realUrl = await storageClient.getDirectURL(hash);
-      await actor.setVideoSource({ roomCode, videoSource: realUrl });
-      onVideoSourceChange(realUrl);
-      toast.success("Video uploaded and set as source for all viewers!");
-      onClose();
+      const url = await storageClient.getDirectURL(hash);
+      await (actor as any).setVideoSource(roomCode, url);
+      onVideoSourceChange(url);
+      toast.success("Video uploaded and applied to all viewers!");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Upload failed");
+      console.error("[handleFileUpload] error:", err);
+      toast.error("Upload failed — please try again");
     } finally {
       setUploading(false);
       setUploadProgress(null);
+      e.target.value = "";
     }
   };
 
   const handleForceSync = async () => {
     setSyncing(true);
     try {
-      await onForceSyncAll();
+      onForceSyncAll();
       toast.success("Force synced all viewers!");
+    } catch (err) {
+      console.error("[handleForceSync] error:", err);
+      toast.error("Sync failed");
     } finally {
       setSyncing(false);
     }
@@ -176,15 +135,6 @@ export default function AdminDashboard({
                 >
                   <Upload className="w-3.5 h-3.5 mr-1.5" />
                   Upload File
-                </TabsTrigger>
-                <TabsTrigger
-                  value="library"
-                  className="flex-1 text-xs"
-                  data-ocid="admin.library.tab"
-                  onClick={fetchLibrary}
-                >
-                  <Library className="w-3.5 h-3.5 mr-1.5" />
-                  Library
                 </TabsTrigger>
               </TabsList>
 
@@ -259,67 +209,6 @@ export default function AdminDashboard({
                         data-ocid="admin.upload.loading_state"
                       />
                     </div>
-                  </div>
-                )}
-              </TabsContent>
-
-              <TabsContent value="library" className="space-y-3">
-                {libraryLoading ? (
-                  <div
-                    className="flex items-center justify-center py-6"
-                    data-ocid="admin.library.loading_state"
-                  >
-                    <Loader2 className="w-5 h-5 animate-spin text-gold" />
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {[0, 1].map((slotIndex) => {
-                      const item = library.find(
-                        (i) => Number(i.slot) === slotIndex,
-                      );
-                      const isLoading = loadingSlot === slotIndex;
-
-                      return (
-                        <div
-                          key={slotIndex}
-                          className="flex items-center gap-3 p-3 rounded-lg border border-border bg-secondary/40"
-                          data-ocid={`admin.library.item.${slotIndex + 1}`}
-                        >
-                          <div className="w-8 h-8 rounded-lg bg-card border border-border flex items-center justify-center flex-shrink-0">
-                            <Film className="w-3.5 h-3.5 text-gold" />
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-xs font-medium text-gold uppercase tracking-wider">
-                              Slot {slotIndex + 1}
-                            </p>
-                            {item ? (
-                              <p className="text-xs text-foreground truncate">
-                                {item.videoName}
-                              </p>
-                            ) : (
-                              <p className="text-xs text-muted-foreground italic">
-                                Empty slot
-                              </p>
-                            )}
-                          </div>
-                          {item && (
-                            <Button
-                              size="sm"
-                              onClick={() => handleLoadFromLibrary(item)}
-                              disabled={isLoading}
-                              className="bg-gold text-background hover:bg-gold/90 font-semibold h-7 px-3 text-xs flex-shrink-0"
-                              data-ocid={`admin.library.button.${slotIndex + 1}`}
-                            >
-                              {isLoading ? (
-                                <Loader2 className="w-3 h-3 animate-spin" />
-                              ) : (
-                                "Load"
-                              )}
-                            </Button>
-                          )}
-                        </div>
-                      );
-                    })}
                   </div>
                 )}
               </TabsContent>
