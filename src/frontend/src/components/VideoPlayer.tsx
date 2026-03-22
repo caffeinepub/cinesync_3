@@ -247,9 +247,19 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
       };
       document.addEventListener("fullscreenchange", handler);
       document.addEventListener("webkitfullscreenchange", handler);
+      // iOS: listen on the video element for native fullscreen exit
+      const videoEl = videoRef.current;
+      if (videoEl) {
+        videoEl.addEventListener("webkitfullscreenchange", handler);
+        videoEl.addEventListener("webkitendfullscreen", handler);
+      }
       return () => {
         document.removeEventListener("fullscreenchange", handler);
         document.removeEventListener("webkitfullscreenchange", handler);
+        if (videoEl) {
+          videoEl.removeEventListener("webkitfullscreenchange", handler);
+          videoEl.removeEventListener("webkitendfullscreen", handler);
+        }
       };
     }, []);
 
@@ -332,23 +342,33 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
 
     const toggleFullscreen = async () => {
       const video = videoRef.current;
-      const targetEl = fullscreenContainerRef?.current ?? containerRef.current;
-      if (!targetEl) return;
+      if (!video) return;
 
-      if (
-        !document.fullscreenElement &&
-        !(document as any).webkitFullscreenElement
-      ) {
-        const wasPlaying = !(video?.paused ?? true);
-        try {
-          await targetEl.requestFullscreen();
-        } catch {
-          /* ignore */
-        }
-        if (wasPlaying) {
-          setTimeout(() => {
-            video?.play().catch(() => {});
-          }, 100);
+      const isIOS = "webkitEnterFullscreen" in video;
+      const isFullscreen =
+        !!document.fullscreenElement ||
+        !!(document as any).webkitFullscreenElement;
+
+      if (!isFullscreen) {
+        const wasPlaying = !video.paused;
+        if (isIOS) {
+          // iOS: fullscreen on the video element directly
+          (video as any).webkitEnterFullscreen();
+          if (wasPlaying) {
+            setTimeout(() => video.play().catch(() => {}), 200);
+          }
+        } else {
+          // Android / Desktop: fullscreen on the local container
+          const targetEl = containerRef.current;
+          if (!targetEl) return;
+          try {
+            await targetEl.requestFullscreen();
+          } catch {
+            /* ignore */
+          }
+          if (wasPlaying) {
+            setTimeout(() => video.play().catch(() => {}), 200);
+          }
         }
       } else {
         document.exitFullscreen().catch(() => {});

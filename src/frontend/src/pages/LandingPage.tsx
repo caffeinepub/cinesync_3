@@ -39,7 +39,7 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
   const {
     actor,
     isFetching: actorFetching,
-    isError: actorError,
+    isError: actorIsError,
     refetch: refetchActor,
   } = useActor();
   const qc = useQueryClient();
@@ -137,8 +137,8 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
     }
   };
 
-  const hasBackendError = actorError && isAuthenticated;
-  const isConnecting = actorFetching && isAuthenticated;
+  const hasBackendError = actorIsError && !actorFetching;
+  const isConnecting = actorFetching;
 
   const createButtonLabel = createLoading
     ? "Creating..."
@@ -147,7 +147,7 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
       : "Create Room";
 
   const createButtonDisabled =
-    !isAuthenticated || createLoading || (hasBackendError && !actorFetching);
+    !isAuthenticated || createLoading || isConnecting || hasBackendError;
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -221,11 +221,80 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
         />
         <div className="absolute inset-0 bg-gradient-to-b from-background/60 via-background/40 to-background" />
         <div className="relative max-w-7xl mx-auto px-4 sm:px-6 py-20 sm:py-28 text-center">
+          {/* Aurora Brand Text */}
+          <style>{`
+        @keyframes aurora-sweep {
+          0% { background-position: 0% 50%; }
+          50% { background-position: 100% 50%; }
+          100% { background-position: 0% 50%; }
+        }
+        @keyframes aurora-glow {
+          0%, 100% { filter: drop-shadow(0 0 12px rgba(0, 230, 230, 0.8)) drop-shadow(0 0 24px rgba(100, 0, 255, 0.4)); }
+          50% { filter: drop-shadow(0 0 20px rgba(130, 0, 255, 0.9)) drop-shadow(0 0 40px rgba(0, 200, 200, 0.5)); }
+        }
+        @keyframes aurora-float {
+          0%, 100% { transform: translateY(0px); }
+          50% { transform: translateY(-8px); }
+        }
+        @keyframes phi-glow {
+          0%, 100% { filter: drop-shadow(0 0 16px rgba(0, 255, 220, 1)) drop-shadow(0 0 32px rgba(0, 200, 255, 0.8)) drop-shadow(0 0 48px rgba(100, 0, 255, 0.5)); }
+          50% { filter: drop-shadow(0 0 24px rgba(200, 0, 255, 1)) drop-shadow(0 0 48px rgba(0, 220, 255, 0.9)) drop-shadow(0 0 64px rgba(0, 255, 200, 0.6)); }
+        }
+        .aurora-text {
+          background: linear-gradient(90deg, #7b00ff 0%, #00e5ff 25%, #00ff9d 50%, #00cfff 75%, #8b00ff 100%);
+          background-size: 300% 100%;
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+          background-clip: text;
+          animation: aurora-sweep 4s ease-in-out infinite, aurora-glow 3s ease-in-out infinite, aurora-float 6s ease-in-out infinite;
+          display: inline-block;
+        }
+        .phi-char {
+          -webkit-text-fill-color: transparent;
+          background: linear-gradient(90deg, #00ffcc, #00e5ff, #00ffcc);
+          background-size: 300% 100%;
+          -webkit-background-clip: text;
+          background-clip: text;
+          animation: aurora-sweep 2s ease-in-out infinite, phi-glow 2s ease-in-out infinite;
+          display: inline-block;
+          position: relative;
+        }
+      `}</style>
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.7 }}
           >
+            {/* Aur∅ra Animated Title */}
+            <div className="mb-8">
+              <span
+                className="aurora-text text-6xl sm:text-7xl lg:text-8xl font-black tracking-tighter select-none"
+                style={{
+                  fontFamily: "'Inter', sans-serif",
+                  letterSpacing: "-0.03em",
+                }}
+              >
+                {[
+                  { char: "A", key: "letter-A", delay: 0.1 },
+                  { char: "u", key: "letter-u", delay: 0.18 },
+                  { char: "r", key: "letter-r1", delay: 0.26 },
+                  { char: "∅", key: "letter-phi", delay: 0.34 },
+                  { char: "r", key: "letter-r2", delay: 0.42 },
+                  { char: "a", key: "letter-a", delay: 0.5 },
+                ].map(({ char, key, delay }) => (
+                  <motion.span
+                    key={key}
+                    initial={{ opacity: 0, y: 32 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ duration: 0.5, delay, ease: "easeOut" }}
+                    className={char === "∅" ? "phi-char" : ""}
+                    style={{ display: "inline-block" }}
+                  >
+                    {char}
+                  </motion.span>
+                ))}
+              </span>
+            </div>
             <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-gold/30 bg-gold/5 text-gold text-xs font-medium tracking-widest uppercase mb-6">
               <span className="w-1.5 h-1.5 rounded-full bg-status-green animate-pulse-slow" />
               Watch Together in Perfect Sync
@@ -365,7 +434,7 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
               </div>
             </div>
 
-            {actorError && (
+            {hasBackendError && (
               <div
                 className="rounded-lg bg-destructive/10 border border-destructive/30 p-3 text-sm text-destructive flex items-center justify-between gap-2"
                 data-ocid="join.error_state"

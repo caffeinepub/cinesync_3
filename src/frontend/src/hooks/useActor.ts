@@ -14,21 +14,21 @@ export function useActor() {
     queryFn: async () => {
       const isAuthenticated = !!identity;
 
+      let actor: backendInterface;
       if (!isAuthenticated) {
-        return await createActorWithConfig();
+        actor = await createActorWithConfig();
+      } else {
+        actor = await createActorWithConfig({ agentOptions: { identity } });
+        // Fire-and-forget — never block actor resolution on this call
+        const adminToken = getSecretParameter("caffeineAdminToken") || "";
+        actor._initializeAccessControlWithSecret(adminToken).catch(() => {});
       }
-
-      const actorOptions = { agentOptions: { identity } };
-      const actor = await createActorWithConfig(actorOptions);
-      // Fire in background — never block actor return
-      const adminToken = getSecretParameter("caffeineAdminToken") || "";
-      actor._initializeAccessControlWithSecret(adminToken).catch(() => {});
       return actor;
     },
     staleTime: Number.POSITIVE_INFINITY,
     enabled: true,
     retry: 3,
-    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 10000),
+    retryDelay: (attempt) => 1500 * attempt,
   });
 
   useEffect(() => {
@@ -46,6 +46,6 @@ export function useActor() {
     actor: actorQuery.data || null,
     isFetching: actorQuery.isFetching,
     isError: actorQuery.isError,
-    refetch: actorQuery.refetch,
+    refetch: () => actorQuery.refetch(),
   };
 }
