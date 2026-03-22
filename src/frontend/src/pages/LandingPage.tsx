@@ -2,12 +2,24 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useQueryClient } from "@tanstack/react-query";
-import { Copy, Film, Loader2, LogIn, Play, Users, Zap } from "lucide-react";
-import { motion } from "motion/react";
-import { useState } from "react";
+import {
+  Copy,
+  Film,
+  Library,
+  Loader2,
+  LogIn,
+  Play,
+  Trash2,
+  Upload,
+  Users,
+  Zap,
+} from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useActor } from "../hooks/useActor";
 import { useInternetIdentity } from "../hooks/useInternetIdentity";
+import { useStorageClient } from "../hooks/useStorageClient";
 
 interface LandingPageProps {
   onEnterRoom: (roomCode: string, nickname: string, isHost: boolean) => void;
@@ -34,14 +46,319 @@ async function withRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
   throw new Error("Max retries exceeded");
 }
 
+const LIBRARY_CODE = "161189";
+
+function LibraryPanel({ onClose }: { onClose: () => void }) {
+  const { actor } = useActor();
+  const { identity, login, loginStatus } = useInternetIdentity();
+  const storageClient = useStorageClient();
+  const isAuthenticated = !!identity;
+  const isLoggingIn = loginStatus === "logging-in";
+
+  const [library, setLibrary] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [isStorageLoading, setIsStorageLoading] = useState(true);
+  const [uploadingSlot, setUploadingSlot] = useState<number | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<number>(0);
+  const [deletingSlot, setDeletingSlot] = useState<number | null>(null);
+  const fileInputRefs = [
+    useRef<HTMLInputElement>(null),
+    useRef<HTMLInputElement>(null),
+  ];
+
+  useEffect(() => {
+    if (storageClient) {
+      setIsStorageLoading(false);
+    }
+  }, [storageClient]);
+
+  const fetchLibrary = async () => {
+    if (!actor) return;
+    try {
+      const items = await (actor as any).getLibrary();
+      setLibrary(items);
+    } catch {
+      toast.error("Failed to load library");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: fetchLibrary is stable within render
+  useEffect(() => {
+    if (actor && isAuthenticated) {
+      fetchLibrary();
+    } else {
+      setLoading(false);
+    }
+  }, [actor, isAuthenticated]);
+
+  const getSlot = (slotIndex: number) =>
+    library.find((item) => Number(item.slot) === slotIndex) ?? null;
+
+  const handleUpload = async (slotIndex: number, file: File) => {
+    if (!actor || !storageClient) {
+      toast.error("Storage not ready");
+      return;
+    }
+    setUploadingSlot(slotIndex);
+    setUploadProgress(0);
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const { hash } = await storageClient.putFile(bytes, (pct) => {
+        setUploadProgress(pct);
+      });
+      const url = await storageClient.getDirectURL(hash);
+      await (actor as any).setLibrarySlot(BigInt(slotIndex), url, file.name);
+      toast.success(`Slot ${slotIndex + 1} saved!`);
+      await fetchLibrary();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setUploadingSlot(null);
+      setUploadProgress(0);
+    }
+  };
+
+  const handleDelete = async (slotIndex: number) => {
+    if (!actor) return;
+    setDeletingSlot(slotIndex);
+    try {
+      await (actor as any).deleteLibrarySlot(BigInt(slotIndex));
+      toast.success(`Slot ${slotIndex + 1} deleted`);
+      await fetchLibrary();
+    } catch {
+      toast.error("Failed to delete slot");
+    } finally {
+      setDeletingSlot(null);
+    }
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-md"
+      onClick={(e) => e.target === e.currentTarget && onClose()}
+      data-ocid="library.modal"
+    >
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95, y: 16 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.95, y: 16 }}
+        transition={{ type: "spring", damping: 25, stiffness: 350 }}
+        className="w-full max-w-md mx-4 rounded-xl border border-gold/30 bg-card shadow-panel overflow-hidden"
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-lg bg-gold/10 border border-gold/25 flex items-center justify-center">
+              <Library className="w-4 h-4 text-gold" />
+            </div>
+            <div>
+              <h2 className="text-sm font-semibold text-foreground">
+                Video Library
+              </h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                2 permanent slots — accessible from any room
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+            data-ocid="library.close.button"
+          >
+            <span className="text-lg leading-none">&times;</span>
+          </button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          {!isAuthenticated ? (
+            <div className="rounded-lg bg-gold/5 border border-gold/20 p-4 text-center space-y-3">
+              <p className="text-sm text-muted-foreground">
+                Sign in to manage your video library
+              </p>
+              <Button
+                onClick={login}
+                disabled={isLoggingIn}
+                className="bg-gold text-background hover:bg-gold/90 font-semibold"
+                data-ocid="library.login.button"
+              >
+                {isLoggingIn ? (
+                  <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                ) : (
+                  <LogIn className="w-4 h-4 mr-2" />
+                )}
+                {isLoggingIn ? "Signing in..." : "Sign In"}
+              </Button>
+            </div>
+          ) : loading ? (
+            <div
+              className="flex items-center justify-center py-8"
+              data-ocid="library.loading_state"
+            >
+              <Loader2 className="w-5 h-5 animate-spin text-gold" />
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {[0, 1].map((slotIndex) => {
+                const item = getSlot(slotIndex);
+                const isUploading = uploadingSlot === slotIndex;
+                const isDeleting = deletingSlot === slotIndex;
+
+                return (
+                  <div
+                    key={slotIndex}
+                    className="rounded-xl border border-border bg-secondary/40 p-4"
+                    data-ocid={`library.item.${slotIndex + 1}`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-9 h-9 rounded-lg bg-card border border-border flex items-center justify-center flex-shrink-0">
+                          <Film className="w-4 h-4 text-gold" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium text-gold uppercase tracking-wider mb-0.5">
+                            Slot {slotIndex + 1}
+                          </p>
+                          {item ? (
+                            <p className="text-sm text-foreground font-medium truncate max-w-[180px]">
+                              {item.videoName}
+                            </p>
+                          ) : (
+                            <p className="text-sm text-muted-foreground italic">
+                              Empty
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        {item ? (
+                          <>
+                            <label
+                              htmlFor={`lib-replace-${slotIndex}`}
+                              className={`p-1.5 rounded-lg transition-colors ${
+                                isStorageLoading || isUploading
+                                  ? "opacity-50 cursor-not-allowed text-muted-foreground"
+                                  : "cursor-pointer text-muted-foreground hover:text-gold hover:bg-gold/10"
+                              }`}
+                              title={
+                                isStorageLoading
+                                  ? "Storage initializing..."
+                                  : "Replace video"
+                              }
+                              data-ocid={`library.upload_button.${slotIndex + 1}`}
+                            >
+                              {isStorageLoading ? (
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Upload className="w-4 h-4" />
+                              )}
+                              <input
+                                id={`lib-replace-${slotIndex}`}
+                                ref={fileInputRefs[slotIndex]}
+                                type="file"
+                                accept="video/*,.mkv,video/x-matroska"
+                                className="hidden"
+                                disabled={isUploading || isStorageLoading}
+                                onChange={(e) => {
+                                  const file = e.target.files?.[0];
+                                  if (file) handleUpload(slotIndex, file);
+                                  e.target.value = "";
+                                }}
+                              />
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => handleDelete(slotIndex)}
+                              disabled={isDeleting}
+                              className="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                              title="Delete slot"
+                              data-ocid={`library.delete_button.${slotIndex + 1}`}
+                            >
+                              {isDeleting ? (
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                              ) : (
+                                <Trash2 className="w-4 h-4" />
+                              )}
+                            </button>
+                          </>
+                        ) : (
+                          <label
+                            htmlFor={`lib-upload-${slotIndex}`}
+                            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
+                              isStorageLoading || isUploading
+                                ? "opacity-50 cursor-not-allowed bg-gold/5 border-gold/20 text-gold/60"
+                                : "cursor-pointer bg-gold/10 border-gold/30 text-gold hover:bg-gold/20"
+                            }`}
+                            data-ocid={`library.upload_button.${slotIndex + 1}`}
+                          >
+                            {isStorageLoading ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Upload className="w-3.5 h-3.5" />
+                            )}
+                            {isStorageLoading ? "Initializing..." : "Upload"}
+                            <input
+                              id={`lib-upload-${slotIndex}`}
+                              ref={fileInputRefs[slotIndex]}
+                              type="file"
+                              accept="video/*,.mkv,video/x-matroska"
+                              className="hidden"
+                              disabled={isUploading || isStorageLoading}
+                              onChange={(e) => {
+                                const file = e.target.files?.[0];
+                                if (file) handleUpload(slotIndex, file);
+                                e.target.value = "";
+                              }}
+                            />
+                          </label>
+                        )}
+                      </div>
+                    </div>
+
+                    {isUploading && (
+                      <div
+                        className="mt-3 space-y-1.5"
+                        data-ocid="library.loading_state"
+                      >
+                        <div className="flex justify-between text-xs text-muted-foreground">
+                          <span>Uploading to network...</span>
+                          <span>{uploadProgress}%</span>
+                        </div>
+                        <div className="w-full bg-card rounded-full h-1.5">
+                          <div
+                            className="bg-gold h-1.5 rounded-full transition-all"
+                            style={{ width: `${uploadProgress}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
 export default function LandingPage({ onEnterRoom }: LandingPageProps) {
   const { identity, login, clear, loginStatus } = useInternetIdentity();
-  const {
-    actor,
-    isFetching: actorFetching,
-    isError: actorIsError,
-    refetch: refetchActor,
-  } = useActor();
+  const { actor, isFetching: actorFetching } = useActor();
+  // actorIsError: treat as error if not fetching and no actor after initial load
+  const [actorLoadFailed, setActorLoadFailed] = useState(false);
+  const actorIsError = actorLoadFailed;
+  const refetchActor = () => {
+    setActorLoadFailed(false);
+    qc.invalidateQueries({ queryKey: ["actor"] });
+  };
   const qc = useQueryClient();
 
   const [createCode, setCreateCode] = useState("");
@@ -51,6 +368,10 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
   const [joinCode, setJoinCode] = useState("");
   const [joinNickname, setJoinNickname] = useState("");
   const [joinLoading, setJoinLoading] = useState(false);
+
+  const [showLibraryPrompt, setShowLibraryPrompt] = useState(false);
+  const [libraryCode, setLibraryCode] = useState("");
+  const [showLibrary, setShowLibrary] = useState(false);
 
   const isAuthenticated = !!identity;
   const isLoggingIn = loginStatus === "logging-in";
@@ -137,6 +458,17 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
     }
   };
 
+  const handleLibraryCodeSubmit = () => {
+    if (libraryCode === LIBRARY_CODE) {
+      setShowLibraryPrompt(false);
+      setLibraryCode("");
+      setShowLibrary(true);
+    } else {
+      toast.error("Incorrect access code");
+      setLibraryCode("");
+    }
+  };
+
   const hasBackendError = actorIsError && !actorFetching;
   const isConnecting = actorFetching;
 
@@ -151,6 +483,78 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
+      {/* Library Panel */}
+      <AnimatePresence>
+        {showLibrary && <LibraryPanel onClose={() => setShowLibrary(false)} />}
+      </AnimatePresence>
+
+      {/* Library Code Prompt */}
+      <AnimatePresence>
+        {showLibraryPrompt && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 backdrop-blur-md"
+            onClick={(e) =>
+              e.target === e.currentTarget && setShowLibraryPrompt(false)
+            }
+            data-ocid="library.dialog"
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 12 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 12 }}
+              transition={{ type: "spring", damping: 25, stiffness: 350 }}
+              className="w-80 mx-4 rounded-xl border border-gold/30 bg-card shadow-panel p-6 space-y-4"
+            >
+              <div className="flex items-center gap-2">
+                <Library className="w-4 h-4 text-gold" />
+                <h3 className="text-sm font-semibold text-foreground">
+                  Library Access
+                </h3>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Enter access code to manage your video library
+              </p>
+              <Input
+                placeholder="Enter access code"
+                type="password"
+                value={libraryCode}
+                onChange={(e) => setLibraryCode(e.target.value)}
+                onKeyDown={(e) =>
+                  e.key === "Enter" && handleLibraryCodeSubmit()
+                }
+                autoFocus
+                className="bg-secondary border-border text-foreground placeholder:text-muted-foreground h-10"
+                data-ocid="library.code.input"
+              />
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setShowLibraryPrompt(false);
+                    setLibraryCode("");
+                  }}
+                  className="flex-1 border-border bg-secondary text-foreground hover:bg-card"
+                  data-ocid="library.cancel.button"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleLibraryCodeSubmit}
+                  disabled={!libraryCode}
+                  className="flex-1 bg-gold text-background hover:bg-gold/90 font-semibold"
+                  data-ocid="library.confirm.button"
+                >
+                  Unlock
+                </Button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Header */}
       <header className="sticky top-0 z-50 border-b border-border bg-background/90 backdrop-blur-md">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
@@ -555,9 +959,21 @@ export default function LandingPage({ onEnterRoom }: LandingPageProps) {
               caffeine.ai
             </a>
           </p>
-          <div className="flex items-center gap-1 text-xs text-muted-foreground">
-            <Copy className="w-3 h-3" />
-            <span>Share your room code to invite friends</span>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1 text-xs text-muted-foreground">
+              <Copy className="w-3 h-3" />
+              <span>Share your room code to invite friends</span>
+            </div>
+            {/* Library button */}
+            <button
+              type="button"
+              onClick={() => setShowLibraryPrompt(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gold/30 bg-gold/5 text-gold text-xs font-medium hover:bg-gold/15 hover:border-gold/60 transition-all"
+              data-ocid="library.open_modal_button"
+            >
+              <Library className="w-3.5 h-3.5" />
+              Library
+            </button>
           </div>
         </div>
       </footer>

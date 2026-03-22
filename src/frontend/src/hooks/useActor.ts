@@ -14,30 +14,40 @@ export function useActor() {
     queryFn: async () => {
       const isAuthenticated = !!identity;
 
-      let actor: backendInterface;
       if (!isAuthenticated) {
-        actor = await createActorWithConfig();
-      } else {
-        actor = await createActorWithConfig({ agentOptions: { identity } });
-        // Fire-and-forget — never block actor resolution on this call
-        const adminToken = getSecretParameter("caffeineAdminToken") || "";
-        actor._initializeAccessControlWithSecret(adminToken).catch(() => {});
+        // Return anonymous actor if not authenticated
+        return await createActorWithConfig();
       }
+
+      const actorOptions = {
+        agentOptions: {
+          identity,
+        },
+      };
+
+      const actor = await createActorWithConfig(actorOptions);
+      const adminToken = getSecretParameter("caffeineAdminToken") || "";
+      await actor._initializeAccessControlWithSecret(adminToken);
       return actor;
     },
+    // Only refetch when identity changes
     staleTime: Number.POSITIVE_INFINITY,
+    // This will cause the actor to be recreated when the identity changes
     enabled: true,
-    retry: 3,
-    retryDelay: (attempt) => 1500 * attempt,
   });
 
+  // When the actor changes, invalidate dependent queries
   useEffect(() => {
     if (actorQuery.data) {
       queryClient.invalidateQueries({
-        predicate: (query) => !query.queryKey.includes(ACTOR_QUERY_KEY),
+        predicate: (query) => {
+          return !query.queryKey.includes(ACTOR_QUERY_KEY);
+        },
       });
       queryClient.refetchQueries({
-        predicate: (query) => !query.queryKey.includes(ACTOR_QUERY_KEY),
+        predicate: (query) => {
+          return !query.queryKey.includes(ACTOR_QUERY_KEY);
+        },
       });
     }
   }, [actorQuery.data, queryClient]);
@@ -45,7 +55,5 @@ export function useActor() {
   return {
     actor: actorQuery.data || null,
     isFetching: actorQuery.isFetching,
-    isError: actorQuery.isError,
-    refetch: () => actorQuery.refetch(),
   };
 }

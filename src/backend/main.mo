@@ -47,6 +47,43 @@ actor {
     userProfiles.add(caller, profile);
   };
 
+  // Video Library Management (up to 2 slots)
+  public type LibraryItem = {
+    slot : Nat;
+    videoUrl : Text;
+    videoName : Text;
+    uploadedAt : Time.Time;
+  };
+
+  let librarySlots = Map.empty<Nat, LibraryItem>();
+
+  public query func getLibrary() : async [LibraryItem] {
+    librarySlots.values().toArray();
+  };
+
+  public shared ({ caller }) func setLibrarySlot(slot : Nat, videoUrl : Text, videoName : Text) : async () {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
+      Runtime.trap("Unauthorized: Only authenticated users can manage the library");
+    };
+    if (slot > 1) {
+      Runtime.trap("Invalid slot: only slots 0 and 1 are supported");
+    };
+    let item : LibraryItem = {
+      slot;
+      videoUrl;
+      videoName;
+      uploadedAt = Time.now();
+    };
+    librarySlots.add(slot, item);
+  };
+
+  public shared ({ caller }) func deleteLibrarySlot(slot : Nat) : async () {
+    if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
+      Runtime.trap("Unauthorized: Only authenticated users can manage the library");
+    };
+    librarySlots.remove(slot);
+  };
+
   // Room Types
   type ChatMessage = {
     sender : Text;
@@ -88,7 +125,6 @@ actor {
 
   // Room Management Functions
   public shared ({ caller }) func createRoom(request : CreateRoomRequest) : async () {
-    // Any authenticated user (not guest) can create a room
     if (not (AccessControl.hasPermission(accessControlState, caller, #user))) {
       Runtime.trap("Unauthorized: Only authenticated users can create rooms");
     };
@@ -119,7 +155,6 @@ actor {
   };
 
   public shared ({ caller }) func joinRoom(roomCode : Text, nickname : Text) : async RoomState {
-    // Any user including guests can join a room
     let room = getRoomInternal(roomCode);
     if (room.participants.contains(nickname)) {
       Runtime.trap("Nickname already taken in this room");
@@ -153,7 +188,6 @@ actor {
   };
 
   public shared ({ caller }) func leaveRoom(request : { roomCode : Text; nickname : Text }) : async () {
-    // Any user can leave a room they're in
     let room = getRoomInternal(request.roomCode);
     if (not room.participants.contains(request.nickname)) {
       Runtime.trap("Not a member of this room");
@@ -222,7 +256,6 @@ actor {
     rooms.add(request.roomCode, updatedRoom);
   };
 
-  // New forceSyncAll functionality
   public shared ({ caller }) func forceSyncAll(request : {
     roomCode : Text;
     position : Float;
@@ -254,7 +287,6 @@ actor {
     nickname : Text;
     message : Text;
   }) : async () {
-    // Any user including guests can send chat messages
     let room = getRoomInternal(request.roomCode);
     let sender = if (request.nickname == "") {
       room.hostNickname;
@@ -282,13 +314,11 @@ actor {
 
   // Query Functions
   public query ({ caller }) func getChatMessages(roomCode : Text) : async [ChatMessage] {
-    // Any user including guests can read chat messages
     let room = getRoomInternal(roomCode);
     room.chatMessages;
   };
 
   public query ({ caller }) func getRoomState(roomCode : Text) : async RoomState {
-    // Any user including guests can view room state
     let room = getRoomInternal(roomCode);
     {
       creator = room.creator;
@@ -304,7 +334,6 @@ actor {
   };
 
   public query ({ caller }) func getAllRoomStates() : async [RoomState] {
-    // Admin-only function for monitoring/debugging
     if (not (AccessControl.isAdmin(accessControlState, caller))) {
       Runtime.trap("Unauthorized: Only admins can view all rooms");
     };
@@ -312,13 +341,11 @@ actor {
   };
 
   public query ({ caller }) func getAllParticipants(roomCode : Text) : async [Text] {
-    // Any user including guests can view participants
     let room = getRoomInternal(roomCode);
     room.participants.toArray();
   };
 
   public query ({ caller }) func getSyncVersion(roomCode : Text) : async Nat {
-    // Any user including guests can check the current sync version
     let room = getRoomInternal(roomCode);
     room.syncVersion;
   };
