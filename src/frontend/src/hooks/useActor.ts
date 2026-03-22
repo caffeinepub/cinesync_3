@@ -18,18 +18,18 @@ export function useActor() {
         return await createActorWithConfig();
       }
 
-      const actorOptions = { agentOptions: { identity } };
+      const actorOptions = {
+        agentOptions: {
+          identity,
+        },
+      };
+
       const actor = await createActorWithConfig(actorOptions);
-      // Fire-and-forget -- do NOT await, so actor is returned immediately
+      // Run in background -- do NOT await, so actor is available immediately
       const adminToken = getSecretParameter("caffeineAdminToken") || "";
-      actor
-        ._initializeAccessControlWithSecret(adminToken)
-        .catch((err: unknown) => {
-          console.warn(
-            "[useActor] _initializeAccessControlWithSecret error (background):",
-            err,
-          );
-        });
+      actor._initializeAccessControlWithSecret(adminToken).catch((err) => {
+        console.warn("[useActor] background init warning:", err);
+      });
       return actor;
     },
     staleTime: Number.POSITIVE_INFINITY,
@@ -39,10 +39,14 @@ export function useActor() {
   useEffect(() => {
     if (actorQuery.data) {
       queryClient.invalidateQueries({
-        predicate: (query) => !query.queryKey.includes(ACTOR_QUERY_KEY),
+        predicate: (query) => {
+          return !query.queryKey.includes(ACTOR_QUERY_KEY);
+        },
       });
       queryClient.refetchQueries({
-        predicate: (query) => !query.queryKey.includes(ACTOR_QUERY_KEY),
+        predicate: (query) => {
+          return !query.queryKey.includes(ACTOR_QUERY_KEY);
+        },
       });
     }
   }, [actorQuery.data, queryClient]);

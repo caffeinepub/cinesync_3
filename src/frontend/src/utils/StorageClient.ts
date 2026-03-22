@@ -7,6 +7,7 @@ const MAXIMUM_CONCURRENT_UPLOADS = 10;
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000;
 const MAX_DELAY_MS = 30000;
+const CERTIFICATE_MAX_ATTEMPTS = 5;
 
 const GATEWAY_VERSION = "v1";
 
@@ -481,11 +482,15 @@ export class StorageClient {
     this.storageGatewayClient = new StorageGatewayClient(storageGatewayUrl);
   }
 
+  /**
+   * Fetches an upload certificate from the backend canister.
+   * Retries up to CERTIFICATE_MAX_ATTEMPTS times because the IC gateway
+   * occasionally returns a non-v3 response body on the first attempt.
+   */
   private async getCertificate(hash: string): Promise<Uint8Array> {
     const args = IDL.encode([IDL.Text], [hash]);
-    const MAX_CERT_ATTEMPTS = 5;
-    const CERT_POLL_DELAY_MS = 1500;
-    for (let attempt = 0; attempt < MAX_CERT_ATTEMPTS; attempt++) {
+
+    for (let attempt = 1; attempt <= CERTIFICATE_MAX_ATTEMPTS; attempt++) {
       try {
         const result = await this.agent.call(this.backendCanisterId, {
           methodName: "_caffeineStorageCreateCertificate",
@@ -495,28 +500,26 @@ export class StorageClient {
         if (isV3ResponseBody(responseBody)) {
           return responseBody.certificate;
         }
-        // v2 response -- wait and retry
+        // Non-v3 response -- log and retry
         console.warn(
-          `Certificate attempt ${attempt + 1}: v2 response, retrying...`,
+          `[getCertificate] attempt ${attempt}/${CERTIFICATE_MAX_ATTEMPTS}: non-v3 response, retrying...`,
         );
-      } catch (err: any) {
-        const msg = (err?.message ?? String(err)).toLowerCase();
-        if (
-          msg.includes("rejected") ||
-          msg.includes("403") ||
-          msg.includes("unauthorized")
-        ) {
-          throw err;
-        }
+      } catch (err) {
         console.warn(
-          `Certificate attempt ${attempt + 1} failed: ${err?.message}. Retrying...`,
+          `[getCertificate] attempt ${attempt}/${CERTIFICATE_MAX_ATTEMPTS} threw:`,
+          err,
         );
+        if (attempt === CERTIFICATE_MAX_ATTEMPTS) throw err;
       }
-      if (attempt < MAX_CERT_ATTEMPTS - 1) {
-        await new Promise((resolve) => setTimeout(resolve, CERT_POLL_DELAY_MS));
-      }
+
+      // Wait before retrying (exponential backoff: 500ms, 1s, 2s, 4s)
+      const delay = Math.min(500 * 2 ** (attempt - 1), 4000);
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
-    throw new Error("Failed to obtain upload certificate. Please try again.");
+
+    throw new Error(
+      `Failed to obtain upload certificate after ${CERTIFICATE_MAX_ATTEMPTS} attempts. Please try again.`,
+    );
   }
 
   public async putFile(
@@ -541,6 +544,9 @@ export class StorageClient {
       await this.processFileForUpload(file, fileHeaders);
     const blobRootHash = blobHashTree.tree.hash;
     const hashString = blobRootHash.toShaString();
+
+    // Signal that we're preparing the upload
+    onProgress?.(0);
 
     const certificateBytes = await this.getCertificate(hashString);
 
@@ -616,7 +622,10 @@ export class StorageClient {
         const percentage =
           chunks.length === 0
             ? 100
-            : Math.round((currentCompleted / chunks.length) * 100);
+            : Math.min(
+                100,
+                Math.round((currentCompleted / chunks.length) * 100),
+              );
         onProgress(percentage);
       }
     };
