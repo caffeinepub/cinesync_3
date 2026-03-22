@@ -15,6 +15,7 @@ export function useActor() {
       const isAuthenticated = !!identity;
 
       if (!isAuthenticated) {
+        // Return anonymous actor immediately
         return await createActorWithConfig();
       }
 
@@ -25,17 +26,17 @@ export function useActor() {
       };
 
       const actor = await createActorWithConfig(actorOptions);
-      // Run in background -- do NOT await, so actor is available immediately
+      // Fire background init without blocking actor availability
       const adminToken = getSecretParameter("caffeineAdminToken") || "";
-      actor._initializeAccessControlWithSecret(adminToken).catch((err) => {
-        console.warn("[useActor] background init warning:", err);
-      });
+      actor._initializeAccessControlWithSecret(adminToken).catch(() => {});
       return actor;
     },
+    // Only refetch when identity changes
     staleTime: Number.POSITIVE_INFINITY,
     enabled: true,
   });
 
+  // When the actor changes, invalidate dependent queries
   useEffect(() => {
     if (actorQuery.data) {
       queryClient.invalidateQueries({

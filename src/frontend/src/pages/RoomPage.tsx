@@ -55,9 +55,12 @@ export default function RoomPage({
   const syncIgnoreUntil = useRef(0);
   const prevSyncVersionRef = useRef<bigint>(BigInt(0));
 
-  // Predictive sync refs — track when we last received a sync and what position it was at
-  const syncReceivedAtRef = useRef<number>(0);
-  const syncReceivedPositionRef = useRef<number>(0);
+  // Predictive sync refs.
+  // These are ONLY updated when the server sends a genuinely new position,
+  // not on every poll. This lets us extrapolate forward in time.
+  const syncReceivedAtRef = useRef<number>(0); // wall-clock ms when we got the last position update
+  const syncReceivedPositionRef = useRef<number>(0); // server position at that moment
+  const lastKnownServerPositionRef = useRef<number>(-1); // to detect real changes
 
   useEffect(() => {
     if (!roomState || effectiveIsHost) return;
@@ -71,15 +74,16 @@ export default function RoomPage({
     const isForceSync = currentSyncVersion > prevSyncVersionRef.current;
     if (isForceSync) prevSyncVersionRef.current = currentSyncVersion;
 
+    // New video source — load and seek to correct position immediately
     if (
       roomState.videoSource &&
       roomState.videoSource !== prevVideoSource.current
     ) {
       prevVideoSource.current = roomState.videoSource;
       setVideoSrc(roomState.videoSource);
-      // Record the sync position when video first loads
       syncReceivedAtRef.current = Date.now();
       syncReceivedPositionRef.current = roomState.position;
+      lastKnownServerPositionRef.current = roomState.position;
       video.loadAndSync(
         roomState.videoSource,
         roomState.position,
@@ -88,9 +92,11 @@ export default function RoomPage({
       return;
     }
 
+    // Force sync (host seeked / explicitly synced)
     if (isForceSync) {
       syncReceivedAtRef.current = Date.now();
       syncReceivedPositionRef.current = roomState.position;
+      lastKnownServerPositionRef.current = roomState.position;
       video.seek(roomState.position);
       if (roomState.isPlaying) {
         video.play();
@@ -102,10 +108,23 @@ export default function RoomPage({
       return;
     }
 
-    // Update predictive sync tracking on every poll
-    syncReceivedAtRef.current = Date.now();
-    syncReceivedPositionRef.current = roomState.position;
+    // --- Predictive sync ---
+    // Only update the anchor when the server position has meaningfully changed
+    // (i.e. the host pushed a new value). Do NOT reset on every poll, otherwise
+    // elapsed is always ~0 and the prediction collapses to raw server position.
+    const serverPosition = roomState.position;
+    const positionDelta = Math.abs(
+      serverPosition - lastKnownServerPositionRef.current,
+    );
+    const isNewPositionFromServer = positionDelta > 1.0; // server sent a genuinely new value
 
+    if (isNewPositionFromServer || lastKnownServerPositionRef.current < 0) {
+      syncReceivedAtRef.current = Date.now();
+      syncReceivedPositionRef.current = serverPosition;
+      lastKnownServerPositionRef.current = serverPosition;
+    }
+
+    // Sync play/pause state
     const localPaused = video.getIsPaused();
     if (roomState.isPlaying && localPaused) {
       video.play();
@@ -113,16 +132,20 @@ export default function RoomPage({
       video.pause();
     }
 
-    // Use predictive position: account for time elapsed since server's position snapshot
+    // Predict where the video SHOULD be right now, accounting for elapsed time
+    // since the last server position update.
     const elapsed = (Date.now() - syncReceivedAtRef.current) / 1000;
     const expectedPosition =
       syncReceivedPositionRef.current + (roomState.isPlaying ? elapsed : 0);
     const localTime = video.getCurrentTime();
     const drift = Math.abs(localTime - expectedPosition);
-    if (drift > 2) {
+
+    // Only hard-seek for significant drift (5 s). Small drift is normal and
+    // harmless — seeking to fix it is what causes the freeze.
+    if (drift > 5) {
       video.seek(expectedPosition);
       setIsSynced(false);
-      setTimeout(() => setIsSynced(true), 1000);
+      setTimeout(() => setIsSynced(true), 1500);
     }
   }, [roomState, effectiveIsHost]);
 
@@ -138,16 +161,17 @@ export default function RoomPage({
     }
   }, [roomState, effectiveIsHost]);
 
+  // Host continuously pushes position every 2 s while playing so participants
+  // always have a fresh anchor and never drift more than ~2 s from expected.
   useEffect(() => {
     if (!effectiveIsHost) return;
-    // Reduced to 6s since participants now predict position locally
     const interval = setInterval(() => {
       const video = videoRef.current;
       if (!video) return;
       if (!video.getIsPaused()) {
         pushPlayback(true, video.getCurrentTime());
       }
-    }, 6000);
+    }, 2000);
     return () => clearInterval(interval);
   }, [effectiveIsHost, pushPlayback]);
 

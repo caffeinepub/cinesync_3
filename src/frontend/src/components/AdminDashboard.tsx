@@ -28,12 +28,13 @@ export default function AdminDashboard({
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [uploading, setUploading] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [syncingToRoom, setSyncingToRoom] = useState(false);
 
   const handleApplyUrl = async () => {
-    if (!urlValue.trim()) return;
+    if (!urlValue.trim() || !actor) return;
     setApplying(true);
     try {
-      await (actor as any).setVideoSource(roomCode, urlValue.trim());
+      await actor.setVideoSource({ roomCode, videoSource: urlValue.trim() });
       onVideoSourceChange(urlValue.trim());
       toast.success("Video URL applied to all viewers!");
       setUrlValue("");
@@ -47,16 +48,46 @@ export default function AdminDashboard({
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !storageClient) return;
+    if (!file || !storageClient || !actor) return;
     setUploading(true);
     setUploadProgress(0);
+    setSyncingToRoom(false);
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
       const { hash } = await storageClient.putFile(bytes, (pct) => {
-        setUploadProgress(Math.min(100, Math.round(pct)));
+        // Cap at 99% until setVideoSource succeeds
+        setUploadProgress(Math.min(99, Math.round(pct)));
       });
       const url = await storageClient.getDirectURL(hash);
-      await (actor as any).setVideoSource(roomCode, url);
+
+      // Show "Syncing to room..." while retrying setVideoSource
+      setSyncingToRoom(true);
+
+      let lastErr: unknown;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          await actor.setVideoSource({ roomCode, videoSource: url });
+          lastErr = null;
+          break;
+        } catch (err) {
+          lastErr = err;
+          console.warn(
+            `[handleFileUpload] setVideoSource attempt ${attempt} failed:`,
+            err,
+          );
+          if (attempt < 3) {
+            await new Promise((res) => setTimeout(res, 2000));
+          }
+        }
+      }
+
+      if (lastErr) {
+        throw lastErr;
+      }
+
+      // All good — show 100%
+      setUploadProgress(100);
+      setSyncingToRoom(false);
       onVideoSourceChange(url);
       toast.success("Video uploaded and applied to all viewers!");
     } catch (err) {
@@ -65,6 +96,7 @@ export default function AdminDashboard({
     } finally {
       setUploading(false);
       setUploadProgress(null);
+      setSyncingToRoom(false);
       e.target.value = "";
     }
   };
@@ -149,7 +181,7 @@ export default function AdminDashboard({
                 />
                 <Button
                   onClick={handleApplyUrl}
-                  disabled={!urlValue.trim() || applying}
+                  disabled={!urlValue.trim() || applying || !actor}
                   className="w-full bg-gold text-background hover:bg-gold/90 font-semibold h-10"
                   data-ocid="admin.apply_url.button"
                 >
@@ -185,7 +217,7 @@ export default function AdminDashboard({
                     accept="video/*,.mkv,video/x-matroska"
                     className="hidden"
                     onChange={handleFileUpload}
-                    disabled={uploading || !storageClient}
+                    disabled={uploading || !storageClient || !actor}
                     data-ocid="admin.upload.button"
                   />
                 </label>
@@ -199,7 +231,11 @@ export default function AdminDashboard({
                 {uploadProgress !== null && (
                   <div className="space-y-1.5">
                     <div className="flex justify-between text-xs text-muted-foreground">
-                      <span>Uploading to network...</span>
+                      <span>
+                        {syncingToRoom
+                          ? "Syncing to room..."
+                          : "Uploading to network..."}
+                      </span>
                       <span>{uploadProgress}%</span>
                     </div>
                     <div className="w-full bg-secondary rounded-full h-1.5">
